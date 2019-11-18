@@ -937,6 +937,42 @@ public class TimeSeriesLifecycleActionsIT extends ESRestTestCase {
         assertBusy(() -> assertThat(getStepKeyForIndex(firstIndex), equalTo(TerminalPolicyStep.KEY)));
     }
 
+    public void testILMRolloverRetriesIfRolloverIndexAlreadyExistsUntilIndexIsDeleted() throws Exception {
+        String firstIndex = index + "-000001";
+        String secondIndex = index + "-000002";
+
+        createNewSingletonPolicy("hot", new RolloverAction(null, TimeValue.timeValueSeconds(1), null));
+
+        // create the index
+        createIndexWithSettings(
+            firstIndex,
+            Settings.builder().put(IndexMetaData.SETTING_NUMBER_OF_SHARDS, 1)
+                .put(IndexMetaData.SETTING_NUMBER_OF_REPLICAS, 0)
+                .put(LifecycleSettings.LIFECYCLE_NAME, policy)
+                .put(RolloverAction.LIFECYCLE_ROLLOVER_ALIAS, "alias"),
+            true
+        );
+
+        createIndexWithSettings(
+            secondIndex,
+            Settings.builder().put(IndexMetaData.SETTING_NUMBER_OF_SHARDS, 1)
+                .put(IndexMetaData.SETTING_NUMBER_OF_REPLICAS, 0)
+                .put(RolloverAction.LIFECYCLE_ROLLOVER_ALIAS, "alias"),
+            false
+        );
+
+        // wait for ILM to start retrying the step
+        assertBusy(() -> {
+            Map<String, Object> explainIndex = explainIndex(firstIndex);
+            assertThat((Integer) explainIndex.get(FAILED_STEP_RETRY_COUNT_FIELD), greaterThanOrEqualTo(1));
+        });
+
+        deleteIndex(secondIndex);
+
+        // the rollover step should now succeed
+        assertBusy(() -> assertThat(getStepKeyForIndex(firstIndex), equalTo(TerminalPolicyStep.KEY)));
+    }
+
    public void testILMRolloverOnManuallyRolledIndex() throws Exception {
        String originalIndex = index + "-000001";
        String secondIndex = index + "-000002";
