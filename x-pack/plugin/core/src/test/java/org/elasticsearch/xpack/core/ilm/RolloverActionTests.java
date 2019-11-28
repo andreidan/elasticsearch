@@ -82,12 +82,12 @@ public class RolloverActionTests extends AbstractActionTestCase<RolloverAction> 
         assertNotNull(steps);
         assertEquals(4, steps.size());
         StepKey expectedFirstStepKey = new StepKey(phase, RolloverAction.NAME, WaitForRolloverReadyStep.NAME);
-        StepKey expectedSecondStepKey = new StepKey(phase, RolloverAction.NAME, RolloverStep.NAME);
-        StepKey expectedThirdStepKey = new StepKey(phase, RolloverAction.NAME, UpdateRolloverLifecycleDateStep.NAME);
+        StepKey expectedSecondStepKey = new StepKey(phase, RolloverAction.NAME, RolloverIndexStep.NAME);
+        StepKey expectedThirdStepKey = new StepKey(phase, RolloverAction.NAME, UpdateRolloverInfoStep.NAME);
         StepKey expectedFourthStepKey = new StepKey(phase, RolloverAction.NAME, RolloverAction.INDEXING_COMPLETE_STEP_NAME);
         WaitForRolloverReadyStep firstStep = (WaitForRolloverReadyStep) steps.get(0);
-        RolloverStep secondStep = (RolloverStep) steps.get(1);
-        UpdateRolloverLifecycleDateStep thirdStep = (UpdateRolloverLifecycleDateStep) steps.get(2);
+        RolloverIndexStep secondStep = (RolloverIndexStep) steps.get(1);
+        UpdateRolloverInfoStep thirdStep = (UpdateRolloverInfoStep) steps.get(2);
         UpdateSettingsStep fourthStep = (UpdateSettingsStep) steps.get(3);
         assertEquals(expectedFirstStepKey, firstStep.getKey());
         assertEquals(expectedSecondStepKey, secondStep.getKey());

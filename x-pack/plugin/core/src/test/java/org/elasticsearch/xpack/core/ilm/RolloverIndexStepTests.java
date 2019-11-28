@@ -30,7 +30,7 @@ import java.util.Locale;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.core.Is.is;
 
-public class RolloverStepTests extends AbstractStepTestCase<RolloverStep> {
+public class RolloverIndexStepTests extends AbstractStepTestCase<RolloverIndexStep> {
 
     private Client client;
 
@@ -40,15 +40,15 @@ public class RolloverStepTests extends AbstractStepTestCase<RolloverStep> {
     }
 
     @Override
-    public RolloverStep createRandomInstance() {
+    public RolloverIndexStep createRandomInstance() {
         StepKey stepKey = randomStepKey();
         StepKey nextStepKey = randomStepKey();
 
-        return new RolloverStep(stepKey, nextStepKey, client);
+        return new RolloverIndexStep(stepKey, nextStepKey, client);
     }
 
     @Override
-    public RolloverStep mutateInstance(RolloverStep instance) {
+    public RolloverIndexStep mutateInstance(RolloverIndexStep instance) {
         StepKey key = instance.getKey();
         StepKey nextKey = instance.getNextStepKey();
 
@@ -64,12 +64,12 @@ public class RolloverStepTests extends AbstractStepTestCase<RolloverStep> {
             throw new AssertionError("Illegal randomisation branch");
         }
 
-        return new RolloverStep(key, nextKey, instance.getClient());
+        return new RolloverIndexStep(key, nextKey, instance.getClient());
     }
 
     @Override
-    public RolloverStep copyInstance(RolloverStep instance) {
-        return new RolloverStep(instance.getKey(), instance.getNextStepKey(), instance.getClient());
+    public RolloverIndexStep copyInstance(RolloverIndexStep instance) {
+        return new RolloverIndexStep(instance.getKey(), instance.getNextStepKey(), instance.getClient());
     }
 
     private static void assertRolloverIndexRequest(RolloverRequest request, String alias) {
@@ -88,7 +88,7 @@ public class RolloverStepTests extends AbstractStepTestCase<RolloverStep> {
             .settings(settings(Version.CURRENT).put(RolloverAction.LIFECYCLE_ROLLOVER_ALIAS, alias))
             .numberOfShards(randomIntBetween(1, 5)).numberOfReplicas(randomIntBetween(0, 5)).build();
 
-        RolloverStep step = createRandomInstance();
+        RolloverIndexStep step = createRandomInstance();
 
         AdminClient adminClient = Mockito.mock(AdminClient.class);
         IndicesAdminClient indicesClient = Mockito.mock(IndicesAdminClient.class);
@@ -139,7 +139,7 @@ public class RolloverStepTests extends AbstractStepTestCase<RolloverStep> {
                 .put(LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE, true))
             .numberOfShards(randomIntBetween(1, 5)).numberOfReplicas(randomIntBetween(0, 5)).build();
 
-        RolloverStep step = createRandomInstance();
+        RolloverIndexStep step = createRandomInstance();
 
         SetOnce<Boolean> actionCompleted = new SetOnce<>();
         step.performAction(indexMetaData, null, null, new AsyncActionStep.Listener() {
@@ -169,7 +169,7 @@ public class RolloverStepTests extends AbstractStepTestCase<RolloverStep> {
             )
             .numberOfShards(randomIntBetween(1, 5)).numberOfReplicas(randomIntBetween(0, 5)).build();
 
-        RolloverStep step = createRandomInstance();
+        RolloverIndexStep step = createRandomInstance();
         AdminClient adminClient = Mockito.mock(AdminClient.class);
         IndicesAdminClient indicesClient = Mockito.mock(IndicesAdminClient.class);
         Mockito.when(client.admin()).thenReturn(adminClient);
@@ -198,7 +198,7 @@ public class RolloverStepTests extends AbstractStepTestCase<RolloverStep> {
             .settings(settings(Version.CURRENT).put(RolloverAction.LIFECYCLE_ROLLOVER_ALIAS, alias))
             .numberOfShards(randomIntBetween(1, 5)).numberOfReplicas(randomIntBetween(0, 5)).build();
         Exception exception = new RuntimeException();
-        RolloverStep step = createRandomInstance();
+        RolloverIndexStep step = createRandomInstance();
 
         AdminClient adminClient = Mockito.mock(AdminClient.class);
         IndicesAdminClient indicesClient = Mockito.mock(IndicesAdminClient.class);
@@ -246,7 +246,7 @@ public class RolloverStepTests extends AbstractStepTestCase<RolloverStep> {
         IndexMetaData indexMetaData = IndexMetaData.builder(randomAlphaOfLength(10))
             .settings(settings(Version.CURRENT).put(RolloverAction.LIFECYCLE_ROLLOVER_ALIAS, alias))
             .numberOfShards(randomIntBetween(1, 5)).numberOfReplicas(randomIntBetween(0, 5)).build();
-        RolloverStep step = createRandomInstance();
+        RolloverIndexStep step = createRandomInstance();
 
         SetOnce<Exception> exceptionThrown = new SetOnce<>();
         step.performAction(indexMetaData, null, null, new AsyncActionStep.Listener() {
@@ -271,7 +271,7 @@ public class RolloverStepTests extends AbstractStepTestCase<RolloverStep> {
         IndexMetaData indexMetaData = IndexMetaData.builder(randomAlphaOfLength(10))
             .settings(settings(Version.CURRENT).put(RolloverAction.LIFECYCLE_ROLLOVER_ALIAS, alias))
             .numberOfShards(randomIntBetween(1, 5)).numberOfReplicas(randomIntBetween(0, 5)).build();
-        RolloverStep step = createRandomInstance();
+        RolloverIndexStep step = createRandomInstance();
 
         SetOnce<Exception> exceptionThrown = new SetOnce<>();
         step.performAction(indexMetaData, null, null, new AsyncActionStep.Listener() {

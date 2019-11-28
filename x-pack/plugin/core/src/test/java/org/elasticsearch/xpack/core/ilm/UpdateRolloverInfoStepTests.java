@@ -20,21 +20,21 @@ import java.util.function.LongSupplier;
 
 import static org.hamcrest.Matchers.equalTo;
 
-public class UpdateRolloverLifecycleDateStepTests extends AbstractStepTestCase<UpdateRolloverLifecycleDateStep> {
+public class UpdateRolloverInfoStepTests extends AbstractStepTestCase<UpdateRolloverInfoStep> {
 
     @Override
-    public UpdateRolloverLifecycleDateStep createRandomInstance() {
+    public UpdateRolloverInfoStep createRandomInstance() {
         return createRandomInstanceWithFallbackTime(null);
     }
 
-    public UpdateRolloverLifecycleDateStep createRandomInstanceWithFallbackTime(LongSupplier fallbackTimeSupplier) {
+    public UpdateRolloverInfoStep createRandomInstanceWithFallbackTime(LongSupplier fallbackTimeSupplier) {
         StepKey stepKey = randomStepKey();
         StepKey nextStepKey = randomStepKey();
-        return new UpdateRolloverLifecycleDateStep(stepKey, nextStepKey, fallbackTimeSupplier);
+        return new UpdateRolloverInfoStep(stepKey, nextStepKey, fallbackTimeSupplier);
     }
 
     @Override
-    public UpdateRolloverLifecycleDateStep mutateInstance(UpdateRolloverLifecycleDateStep instance) {
+    public UpdateRolloverInfoStep mutateInstance(UpdateRolloverInfoStep instance) {
         StepKey key = instance.getKey();
         StepKey nextKey = instance.getNextStepKey();
 
@@ -44,12 +44,12 @@ public class UpdateRolloverLifecycleDateStepTests extends AbstractStepTestCase<U
             nextKey = new StepKey(key.getPhase(), key.getAction(), key.getName() + randomAlphaOfLength(5));
         }
 
-        return new UpdateRolloverLifecycleDateStep(key, nextKey, null);
+        return new UpdateRolloverInfoStep(key, nextKey, null);
     }
 
     @Override
-    public UpdateRolloverLifecycleDateStep copyInstance(UpdateRolloverLifecycleDateStep instance) {
-        return new UpdateRolloverLifecycleDateStep(instance.getKey(), instance.getNextStepKey(), null);
+    public UpdateRolloverInfoStep copyInstance(UpdateRolloverInfoStep instance) {
+        return new UpdateRolloverInfoStep(instance.getKey(), instance.getNextStepKey(), null);
     }
 
     @SuppressWarnings("unchecked")
@@ -70,7 +70,7 @@ public class UpdateRolloverLifecycleDateStepTests extends AbstractStepTestCase<U
                 .put(indexMetaData, false)
                 .put(newIndexMetaData, false)).build();
 
-        UpdateRolloverLifecycleDateStep step = createRandomInstance();
+        UpdateRolloverInfoStep step = createRandomInstance();
         ClusterState newState = step.performAction(indexMetaData.getIndex(), clusterState);
         long actualRolloverTime = LifecycleExecutionState
             .fromIndexMetadata(newState.metaData().index(indexMetaData.getIndex()))
@@ -87,7 +87,7 @@ public class UpdateRolloverLifecycleDateStepTests extends AbstractStepTestCase<U
             .numberOfReplicas(randomIntBetween(0, 5)).build();
         ClusterState clusterState = ClusterState.builder(ClusterName.DEFAULT)
             .metaData(MetaData.builder().put(indexMetaData, false)).build();
-        UpdateRolloverLifecycleDateStep step = createRandomInstance();
+        UpdateRolloverInfoStep step = createRandomInstance();
 
         IllegalStateException exceptionThrown = expectThrows(IllegalStateException.class,
             () -> step.performAction(indexMetaData.getIndex(), clusterState));
@@ -103,7 +103,7 @@ public class UpdateRolloverLifecycleDateStepTests extends AbstractStepTestCase<U
             .numberOfReplicas(randomIntBetween(0, 5)).build();
         ClusterState clusterState = ClusterState.builder(ClusterName.DEFAULT)
             .metaData(MetaData.builder().put(indexMetaData, false)).build();
-        UpdateRolloverLifecycleDateStep step = createRandomInstance();
+        UpdateRolloverInfoStep step = createRandomInstance();
 
         IllegalStateException exceptionThrown = expectThrows(IllegalStateException.class,
             () -> step.performAction(indexMetaData.getIndex(), clusterState));
@@ -125,7 +125,7 @@ public class UpdateRolloverLifecycleDateStepTests extends AbstractStepTestCase<U
             .metaData(MetaData.builder()
                 .put(indexMetaData, false)).build();
 
-        UpdateRolloverLifecycleDateStep step = createRandomInstanceWithFallbackTime(() -> rolloverTime);
+        UpdateRolloverInfoStep step = createRandomInstanceWithFallbackTime(() -> rolloverTime);
         ClusterState newState = step.performAction(indexMetaData.getIndex(), clusterState);
         long actualRolloverTime = LifecycleExecutionState
             .fromIndexMetadata(newState.metaData().index(indexMetaData.getIndex()))

@@ -87,6 +87,11 @@ import java.util.Map;
 import java.util.Set;
 
 import static java.util.Collections.emptyList;
+import static org.elasticsearch.action.admin.indices.rollover.RolloverAliasAndIndexResolver.checkNoDuplicatedAliasInIndexTemplate;
+import static org.elasticsearch.action.admin.indices.rollover.RolloverAliasAndIndexResolver.generateRolloverIndexName;
+import static org.elasticsearch.action.admin.indices.rollover.RolloverAliasAndIndexResolver.prepareRolloverAliasesUpdateRequest;
+import static org.elasticsearch.action.admin.indices.rollover.RolloverAliasAndIndexResolver.prepareRolloverAliasesWriteIndexUpdateRequest;
+import static org.elasticsearch.action.admin.indices.rollover.RolloverAliasAndIndexResolver.validateAlias;
 import static org.elasticsearch.action.admin.indices.rollover.TransportRolloverAction.evaluateConditions;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
@@ -225,7 +230,10 @@ public class TransportRolloverActionTests extends ESTestCase {
         String targetIndex = randomAlphaOfLength(10);
         final RolloverRequest rolloverRequest = new RolloverRequest(sourceAlias, targetIndex);
         final IndicesAliasesClusterStateUpdateRequest updateRequest =
-            TransportRolloverAction.prepareRolloverAliasesUpdateRequest(sourceIndex, targetIndex, rolloverRequest);
+            new IndicesAliasesClusterStateUpdateRequest(prepareRolloverAliasesUpdateRequest(sourceIndex, targetIndex,
+                rolloverRequest.getAlias()))
+                .ackTimeout(rolloverRequest.ackTimeout())
+                .masterNodeTimeout(rolloverRequest.masterNodeTimeout());
 
         List<AliasAction> actions = updateRequest.actions();
         assertThat(actions, hasSize(2));
@@ -252,7 +260,10 @@ public class TransportRolloverActionTests extends ESTestCase {
         String targetIndex = randomAlphaOfLength(10);
         final RolloverRequest rolloverRequest = new RolloverRequest(sourceAlias, targetIndex);
         final IndicesAliasesClusterStateUpdateRequest updateRequest =
-            TransportRolloverAction.prepareRolloverAliasesWriteIndexUpdateRequest(sourceIndex, targetIndex, rolloverRequest);
+            new IndicesAliasesClusterStateUpdateRequest(prepareRolloverAliasesWriteIndexUpdateRequest(sourceIndex, targetIndex,
+                rolloverRequest.getAlias()))
+                .ackTimeout(rolloverRequest.ackTimeout())
+                .masterNodeTimeout(rolloverRequest.masterNodeTimeout());
 
         List<AliasAction> actions = updateRequest.actions();
         assertThat(actions, hasSize(2));
@@ -302,36 +313,35 @@ public class TransportRolloverActionTests extends ESTestCase {
         MetaData metaData = metaDataBuilder.build();
 
         IllegalArgumentException exception = expectThrows(IllegalArgumentException.class, () ->
-            TransportRolloverAction.validate(metaData, new RolloverRequest(aliasWithNoWriteIndex,
-                randomAlphaOfLength(10))));
+            validateAlias(metaData.getAliasAndIndexLookup().get(aliasWithNoWriteIndex))
+        );
         assertThat(exception.getMessage(), equalTo("source alias [" + aliasWithNoWriteIndex + "] does not point to a write index"));
         exception = expectThrows(IllegalArgumentException.class, () ->
-            TransportRolloverAction.validate(metaData, new RolloverRequest(randomFrom(index1, index2),
-                randomAlphaOfLength(10))));
+            validateAlias(metaData.getAliasAndIndexLookup().get(randomFrom(index1, index2)))
+        );
         assertThat(exception.getMessage(), equalTo("source alias is a concrete index"));
         exception = expectThrows(IllegalArgumentException.class, () ->
-            TransportRolloverAction.validate(metaData, new RolloverRequest(randomAlphaOfLength(5),
-                randomAlphaOfLength(10)))
+            validateAlias(metaData.getAliasAndIndexLookup().get(randomAlphaOfLength(5)))
         );
         assertThat(exception.getMessage(), equalTo("source alias does not exist"));
-        TransportRolloverAction.validate(metaData, new RolloverRequest(aliasWithWriteIndex, randomAlphaOfLength(10)));
+        validateAlias(metaData.getAliasAndIndexLookup().get(aliasWithWriteIndex));
     }
 
     public void testGenerateRolloverIndexName() {
         String invalidIndexName = randomAlphaOfLength(10) + "A";
         IndexNameExpressionResolver indexNameExpressionResolver = new IndexNameExpressionResolver();
         expectThrows(IllegalArgumentException.class, () ->
-            TransportRolloverAction.generateRolloverIndexName(invalidIndexName, indexNameExpressionResolver));
+            generateRolloverIndexName(invalidIndexName, indexNameExpressionResolver));
         int num = randomIntBetween(0, 100);
         final String indexPrefix = randomAlphaOfLength(10);
         String indexEndingInNumbers = indexPrefix + "-" + num;
-        assertThat(TransportRolloverAction.generateRolloverIndexName(indexEndingInNumbers, indexNameExpressionResolver),
+        assertThat(generateRolloverIndexName(indexEndingInNumbers, indexNameExpressionResolver),
             equalTo(indexPrefix + "-" + String.format(Locale.ROOT, "%06d", num + 1)));
-        assertThat(TransportRolloverAction.generateRolloverIndexName("index-name-1", indexNameExpressionResolver),
+        assertThat(generateRolloverIndexName("index-name-1", indexNameExpressionResolver),
             equalTo("index-name-000002"));
-        assertThat(TransportRolloverAction.generateRolloverIndexName("index-name-2", indexNameExpressionResolver),
+        assertThat(generateRolloverIndexName("index-name-2", indexNameExpressionResolver),
             equalTo("index-name-000003"));
-        assertEquals( "<index-name-{now/d}-000002>", TransportRolloverAction.generateRolloverIndexName("<index-name-{now/d}-1>",
+        assertEquals( "<index-name-{now/d}-000002>", generateRolloverIndexName("<index-name-{now/d}-1>",
             indexNameExpressionResolver));
     }
 
@@ -364,7 +374,7 @@ public class TransportRolloverActionTests extends ESTestCase {
         String indexName = randomFrom("foo-123", "bar-xyz");
         String aliasName = randomFrom("foo-write", "bar-write");
         final IllegalArgumentException ex = expectThrows(IllegalArgumentException.class,
-            () -> TransportRolloverAction.checkNoDuplicatedAliasInIndexTemplate(metaData, indexName, aliasName));
+            () -> checkNoDuplicatedAliasInIndexTemplate(metaData, indexName, aliasName));
         assertThat(ex.getMessage(), containsString("index template [test-template]"));
     }
 

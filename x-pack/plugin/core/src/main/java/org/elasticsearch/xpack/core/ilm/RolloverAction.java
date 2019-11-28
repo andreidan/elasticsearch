@@ -138,18 +138,24 @@ public class RolloverAction implements LifecycleAction {
         Settings indexingComplete = Settings.builder().put(LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE, true).build();
 
         StepKey waitForRolloverReadyStepKey = new StepKey(phase, NAME, WaitForRolloverReadyStep.NAME);
-        StepKey rolloverStepKey = new StepKey(phase, NAME, RolloverStep.NAME);
-        StepKey updateDateStepKey = new StepKey(phase, NAME, UpdateRolloverLifecycleDateStep.NAME);
+        StepKey rolloverStepKey = new StepKey(phase, NAME, RolloverIndexStep.NAME);
+        StepKey rolloverAliasKey = new StepKey(phase, NAME, RolloverAliasStep.NAME);
+        StepKey updateRolloverInfoStepKey = new StepKey(phase, NAME, UpdateRolloverInfoStep.NAME);
+        StepKey waitForRolloverIndexActiveShards = new StepKey(phase, NAME, WaitForIndexActiveShardsStep.NAME);
         StepKey setIndexingCompleteStepKey = new StepKey(phase, NAME, INDEXING_COMPLETE_STEP_NAME);
 
         WaitForRolloverReadyStep waitForRolloverReadyStep = new WaitForRolloverReadyStep(waitForRolloverReadyStepKey, rolloverStepKey,
             client, maxSize, maxAge, maxDocs);
-        RolloverStep rolloverStep = new RolloverStep(rolloverStepKey, updateDateStepKey, client);
-        UpdateRolloverLifecycleDateStep updateDateStep = new UpdateRolloverLifecycleDateStep(updateDateStepKey, setIndexingCompleteStepKey,
-            System::currentTimeMillis);
+        RolloverIndexStep rolloverIndexStep = new RolloverIndexStep(rolloverStepKey, rolloverAliasKey, client);
+        RolloverAliasStep rolloverAliasStep = new RolloverAliasStep(rolloverAliasKey, updateRolloverInfoStepKey, client);
+        UpdateRolloverInfoStep updateRolloverInfoStep = new UpdateRolloverInfoStep(updateRolloverInfoStepKey,
+            waitForRolloverIndexActiveShards, System::currentTimeMillis);
+        WaitForIndexActiveShardsStep waitForActiveShardsStep = new WaitForIndexActiveShardsStep(waitForRolloverIndexActiveShards,
+            setIndexingCompleteStepKey);
         UpdateSettingsStep setIndexingCompleteStep = new UpdateSettingsStep(setIndexingCompleteStepKey, nextStepKey,
             client, indexingComplete);
-        return Arrays.asList(waitForRolloverReadyStep, rolloverStep, updateDateStep, setIndexingCompleteStep);
+        return Arrays.asList(waitForRolloverReadyStep, rolloverIndexStep, rolloverAliasStep, updateRolloverInfoStep,
+            waitForActiveShardsStep, setIndexingCompleteStep);
     }
 
     @Override

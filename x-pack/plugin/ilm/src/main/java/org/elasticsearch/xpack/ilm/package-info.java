@@ -70,7 +70,7 @@
  * The policy execution can be seen as a state machine which advances through every phase's (hot/warm/cold/delete) action's
  * (rollover/forcemerge/etc) steps (eg. the {@link org.elasticsearch.xpack.core.ilm.RolloverAction} comprises a series of steps that need
  * to be executed. It will first check if the rollover could be executed {@link org.elasticsearch.xpack.core.ilm.WaitForRolloverReadyStep}
- * and then rollover the index {@link org.elasticsearch.xpack.core.ilm.RolloverStep} followed by some more house-keeping steps).
+ * and then rollover the index {@link org.elasticsearch.xpack.core.ilm.RolloverIndexStep} followed by some more house-keeping steps).
  *
  * The ILM runner will advance last executed state (as indicated in
  * {@link org.elasticsearch.xpack.core.ilm.LifecycleExecutionState#getStep()}) and execute the next step of the index policy as

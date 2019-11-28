@@ -8,25 +8,32 @@ package org.elasticsearch.xpack.core.ilm;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
-import org.elasticsearch.action.admin.indices.rollover.RolloverRequest;
+import org.elasticsearch.action.admin.indices.alias.IndicesAliasesRequest;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.ClusterStateObserver;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.common.Strings;
 
 import java.util.Locale;
 import java.util.Objects;
 
+import static org.elasticsearch.action.admin.indices.alias.IndicesAliasesRequest.AliasActions.add;
+import static org.elasticsearch.action.admin.indices.rollover.RolloverAliasAndIndexResolver.resolveRolloverIndexName;
+import static org.elasticsearch.action.admin.indices.rollover.RolloverAliasAndIndexResolver.validateAlias;
+
 /**
- * Unconditionally rolls over an index using the Rollover API.
+ * Rolls over the alias from the source index (also swapping its write index flag to false) to the rolled over index, making it the alias
  */
-public class RolloverStep extends AsyncActionStep {
-    private static final Logger logger = LogManager.getLogger(RolloverStep.class);
+public class RolloverAliasStep extends AsyncActionStep {
+    private static final Logger logger = LogManager.getLogger(RolloverAliasStep.class);
 
-    public static final String NAME = "attempt-rollover";
+    public static final String NAME = "rollover-alias";
 
-    public RolloverStep(StepKey key, StepKey nextStepKey, Client client) {
+    private final IndexNameExpressionResolver indexNameExpressionResolver = new IndexNameExpressionResolver();
+
+    public RolloverAliasStep(StepKey key, StepKey nextStepKey, Client client) {
         super(key, nextStepKey, client);
     }
 
@@ -40,7 +47,7 @@ public class RolloverStep extends AsyncActionStep {
                               ClusterStateObserver observer, Listener listener) {
         boolean indexingComplete = LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE_SETTING.get(indexMetaData.getSettings());
         if (indexingComplete) {
-            logger.trace(indexMetaData.getIndex() + " has lifecycle complete set, skipping " + RolloverStep.NAME);
+            logger.trace(indexMetaData.getIndex() + " has lifecycle complete set, skipping " + RolloverAliasStep.NAME);
             listener.onResponse(true);
             return;
         }
@@ -68,15 +75,16 @@ public class RolloverStep extends AsyncActionStep {
             return;
         }
 
-        // Calling rollover with no conditions will always roll over the index
-        RolloverRequest rolloverRequest = new RolloverRequest(rolloverAlias, null);
-        getClient().admin().indices().rolloverIndex(rolloverRequest,
-            ActionListener.wrap(response -> {
-                assert response.isRolledOver() : "the only way this rollover call should fail is with an exception";
-                listener.onResponse(response.isRolledOver());
-            }, listener::onFailure));
-    }
+        validateAlias(currentClusterState.metaData().getAliasAndIndexLookup().get(rolloverAlias));
+        String rolloverIndexName = resolveRolloverIndexName(indexMetaData, null, indexNameExpressionResolver);
 
+        IndicesAliasesRequest indicesAliasesRequest = new IndicesAliasesRequest()
+            .addAliasAction(add().index(rolloverIndexName).alias(rolloverAlias).writeIndex(true))
+            .addAliasAction(add().index(indexMetaData.getIndex().getName()).alias(rolloverAlias).writeIndex(false));
+        getClient().admin().indices().aliases(indicesAliasesRequest,
+            ActionListener.wrap(response -> listener.onResponse(response.isAcknowledged()), listener::onFailure)
+        );
+    }
 
     @Override
     public int hashCode() {
@@ -91,7 +99,7 @@ public class RolloverStep extends AsyncActionStep {
         if (getClass() != obj.getClass()) {
             return false;
         }
-        RolloverStep other = (RolloverStep) obj;
+        RolloverAliasStep other = (RolloverAliasStep) obj;
         return super.equals(obj);
     }
 }
