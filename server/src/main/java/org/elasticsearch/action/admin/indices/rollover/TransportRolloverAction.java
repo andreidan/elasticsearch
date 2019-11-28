@@ -141,7 +141,7 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
                             new RolloverResponse(sourceIndexName, rolloverIndexName, conditionResults, true, false, false, false));
                         return;
                     }
-                    List<Condition<?>> metConditions =  rolloverRequest.getConditions().values().stream()
+                    List<Condition<?>> metConditions = rolloverRequest.getConditions().values().stream()
                         .filter(condition -> conditionResults.get(condition.toString())).collect(Collectors.toList());
                     if (conditionResults.size() == 0 || metConditions.size() > 0) {
                         String unresolvedRolloverIndexName = getUnresolvedRolloverIndexName(indexMetaData,
@@ -155,7 +155,8 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
                                 return;
                             }
 
-                            final boolean explicitWriteIndex = Boolean.TRUE.equals(indexMetaData.getAliases().get(alias.getAliasName()).writeIndex());
+                            final boolean explicitWriteIndex =
+                                Boolean.TRUE.equals(indexMetaData.getAliases().get(alias.getAliasName()).writeIndex());
                             final List<AliasAction> aliasActions;
                             if (explicitWriteIndex) {
                                 aliasActions = prepareRolloverAliasesWriteIndexUpdateRequest(sourceIndexName,
