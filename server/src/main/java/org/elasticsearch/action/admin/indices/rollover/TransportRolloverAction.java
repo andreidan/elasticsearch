@@ -149,12 +149,6 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
                         CreateIndexClusterStateUpdateRequest updateRequest =
                             prepareCreateIndexRequest(unresolvedRolloverIndexName, rolloverIndexName, rolloverRequest);
                         createIndexService.createIndex(updateRequest, ActionListener.wrap(createIndexClusterStateUpdateResponse -> {
-                            if (rolloverRequest.onlyRolloverTheIndex()) {
-                                listener.onResponse(new RolloverResponse(sourceIndexName, rolloverIndexName, conditionResults,
-                                    false, true, false, false));
-                                return;
-                            }
-
                             final boolean explicitWriteIndex =
                                 Boolean.TRUE.equals(indexMetaData.getAliases().get(alias.getAliasName()).writeIndex());
                             final List<AliasAction> aliasActions;

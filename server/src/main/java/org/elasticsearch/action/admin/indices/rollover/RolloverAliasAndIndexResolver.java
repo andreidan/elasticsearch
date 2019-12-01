@@ -1,5 +1,8 @@
 package org.elasticsearch.action.admin.indices.rollover;
 
+import org.elasticsearch.action.admin.indices.create.CreateIndexClusterStateUpdateRequest;
+import org.elasticsearch.action.admin.indices.create.CreateIndexRequest;
+import org.elasticsearch.action.support.ActiveShardCount;
 import org.elasticsearch.cluster.metadata.AliasAction;
 import org.elasticsearch.cluster.metadata.AliasOrIndex;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
@@ -40,7 +43,7 @@ public final class RolloverAliasAndIndexResolver {
         return indexNameExpressionResolver.resolveDateMathExpression(unresolvedName);
     }
 
-    static String getUnresolvedRolloverIndexName(IndexMetaData sourceIndexMetaData, @Nullable String rolloverIndexName,
+    public static String getUnresolvedRolloverIndexName(IndexMetaData sourceIndexMetaData, @Nullable String rolloverIndexName,
                                                         IndexNameExpressionResolver indexNameExpressionResolver) {
         String sourceProvidedName = sourceIndexMetaData.getSettings()
             .get(IndexMetaData.SETTING_INDEX_PROVIDED_NAME, sourceIndexMetaData.getIndex().getName());
@@ -70,7 +73,7 @@ public final class RolloverAliasAndIndexResolver {
      * the rollover alias will point to multiple indices. This causes indexing requests to be rejected.
      * To avoid this, we make sure that there is no duplicated alias in index templates before creating a new index.
      */
-    static void checkNoDuplicatedAliasInIndexTemplate(MetaData metaData, String rolloverIndexName, String rolloverRequestAlias) {
+    public static void checkNoDuplicatedAliasInIndexTemplate(MetaData metaData, String rolloverIndexName, String rolloverRequestAlias) {
         final List<IndexTemplateMetaData> matchedTemplates = MetaDataIndexTemplateService.findTemplates(metaData, rolloverIndexName);
         for (IndexTemplateMetaData template : matchedTemplates) {
             if (template.aliases().containsKey(rolloverRequestAlias)) {

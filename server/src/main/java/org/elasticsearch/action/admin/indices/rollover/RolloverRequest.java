@@ -18,7 +18,6 @@
  */
 package org.elasticsearch.action.admin.indices.rollover;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.admin.indices.create.CreateIndexRequest;
@@ -84,12 +83,6 @@ public class RolloverRequest extends AcknowledgedRequest<RolloverRequest> implem
     private String alias;
     private String newIndexName;
     private boolean dryRun;
-    // Indicates if only the index should be rolled (without rolling over the alias to the newly created index and attaching rollover
-    // information to the source index).
-    // We're not exposing this to the HLC RolloverRequest as we want the manual rollover requests to execute all the steps to have
-    // complete rollover operation, as opposed to other mechanisms (ie. ILM) that will trigger (and make sure they succeed) the
-    // subsequent steps without user intervention.
-    private boolean onlyRolloverTheIndex = false;
     private Map<String, Condition<?>> conditions = new HashMap<>(2);
     //the index name "_na_" is never read back, what matters are settings, mappings and aliases
     private CreateIndexRequest createIndexRequest = new CreateIndexRequest("_na_");
@@ -105,9 +98,6 @@ public class RolloverRequest extends AcknowledgedRequest<RolloverRequest> implem
             this.conditions.put(condition.name, condition);
         }
         createIndexRequest = new CreateIndexRequest(in);
-        if (in.getVersion().onOrAfter(Version.V_8_0_0)) {
-            onlyRolloverTheIndex = in.readOptionalBoolean();
-        }
     }
 
     RolloverRequest() {}
@@ -115,11 +105,6 @@ public class RolloverRequest extends AcknowledgedRequest<RolloverRequest> implem
     public RolloverRequest(String alias, String newIndexName) {
         this.alias = alias;
         this.newIndexName = newIndexName;
-    }
-
-    public RolloverRequest(String alias, String newIndexName, boolean onlyRolloverTheIndex) {
-        this(alias, newIndexName);
-        this.onlyRolloverTheIndex = onlyRolloverTheIndex;
     }
 
     @Override
@@ -142,9 +127,6 @@ public class RolloverRequest extends AcknowledgedRequest<RolloverRequest> implem
             out.writeNamedWriteable(condition);
         }
         createIndexRequest.writeTo(out);
-        if (out.getVersion().onOrAfter(Version.V_8_0_0)) {
-            out.writeOptionalBoolean(onlyRolloverTheIndex);
-        }
     }
 
     @Override
@@ -234,24 +216,8 @@ public class RolloverRequest extends AcknowledgedRequest<RolloverRequest> implem
         return createIndexRequest;
     }
 
-    boolean onlyRolloverTheIndex() {
-        return onlyRolloverTheIndex;
-    }
-
     // param isTypeIncluded decides how mappings should be parsed from XContent
     public void fromXContent(XContentParser parser) throws IOException {
         PARSER.parse(parser, this, null);
-    }
-
-    @Override
-    public String toString() {
-        return "RolloverRequest{" +
-            "alias='" + alias + '\'' +
-            ", newIndexName='" + newIndexName + '\'' +
-            ", dryRun=" + dryRun +
-            ", onlyRolloverTheIndex=" + onlyRolloverTheIndex +
-            ", conditions=" + conditions +
-            ", createIndexRequest=" + createIndexRequest +
-            '}';
     }
 }

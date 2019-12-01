@@ -8,15 +8,22 @@ package org.elasticsearch.xpack.core.ilm;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
-import org.elasticsearch.action.admin.indices.rollover.RolloverRequest;
+import org.elasticsearch.action.admin.indices.create.CreateIndexRequest;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.ClusterStateObserver;
+import org.elasticsearch.cluster.metadata.AliasOrIndex;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
+import org.elasticsearch.cluster.metadata.MetaDataCreateIndexService;
 import org.elasticsearch.common.Strings;
 
 import java.util.Locale;
 import java.util.Objects;
+
+import static org.elasticsearch.action.admin.indices.rollover.RolloverAliasAndIndexResolver.checkNoDuplicatedAliasInIndexTemplate;
+import static org.elasticsearch.action.admin.indices.rollover.RolloverAliasAndIndexResolver.resolveRolloverIndexName;
+import static org.elasticsearch.action.admin.indices.rollover.RolloverAliasAndIndexResolver.validateAlias;
 
 /**
  * Unconditionally rolls over an index using the Rollover API.
@@ -25,6 +32,8 @@ public class RolloverIndexStep extends AsyncActionStep {
     private static final Logger logger = LogManager.getLogger(RolloverIndexStep.class);
 
     public static final String NAME = "attempt-rollover";
+
+    private final IndexNameExpressionResolver indexNameExpressionResolver = new IndexNameExpressionResolver();
 
     public RolloverIndexStep(StepKey key, StepKey nextStepKey, Client client) {
         super(key, nextStepKey, client);
@@ -68,13 +77,19 @@ public class RolloverIndexStep extends AsyncActionStep {
             return;
         }
 
-        // Calling rollover with no conditions will always roll over the index
-        RolloverRequest rolloverRequest = new RolloverRequest(rolloverAlias, null, true);
-        getClient().admin().indices().rolloverIndex(rolloverRequest,
-            ActionListener.wrap(response -> {
-                assert response.isRolledOver() : "the only way this rollover call should fail is with an exception";
-                listener.onResponse(response.isRolledOver());
-            }, listener::onFailure));
+        AliasOrIndex aliasOrIndex = currentClusterState.metaData().getAliasAndIndexLookup().get(rolloverAlias);
+        validateAlias(aliasOrIndex);
+        String rolloverIndexName = resolveRolloverIndexName(indexMetaData, null, indexNameExpressionResolver);
+        try {
+            MetaDataCreateIndexService.validateIndexName(rolloverIndexName, currentClusterState); // will fail if the index already exists
+            checkNoDuplicatedAliasInIndexTemplate(currentClusterState.metaData(), rolloverIndexName, rolloverAlias);
+        } catch (Exception e) {
+           listener.onFailure(e);
+           return;
+        }
+
+        getClient().admin().indices().create(new CreateIndexRequest(rolloverIndexName),
+            ActionListener.wrap(response -> listener.onResponse(response.isAcknowledged()), listener::onFailure));
     }
 
     @Override
