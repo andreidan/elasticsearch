@@ -33,6 +33,7 @@ import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.rollup.RollupV2;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.xpack.ccr.CCRInfoTransportAction;
+import org.elasticsearch.xpack.cluster.action.MigrateToDataTiersAction;
 import org.elasticsearch.xpack.core.action.XPackInfoAction;
 import org.elasticsearch.xpack.core.action.XPackUsageAction;
 import org.elasticsearch.xpack.core.aggregatemetric.AggregateMetricFeatureSetUsage;
@@ -399,6 +400,7 @@ public class XPackClientPlugin extends Plugin implements ActionPlugin, NetworkPl
             DeleteSnapshotLifecycleAction.INSTANCE,
             ExecuteSnapshotLifecycleAction.INSTANCE,
             GetSnapshotLifecycleStatsAction.INSTANCE,
+            MigrateToDataTiersAction.INSTANCE,
             // Freeze
             FreezeIndexAction.INSTANCE,
             // Data Frame
