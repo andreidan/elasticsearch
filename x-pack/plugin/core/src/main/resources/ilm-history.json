@@ -22,6 +22,9 @@
           "policy": {
             "type": "keyword"
           },
+          "another_index_age" : {
+            "type" : "long"
+          },
           "index": {
             "type": "keyword"
           },
