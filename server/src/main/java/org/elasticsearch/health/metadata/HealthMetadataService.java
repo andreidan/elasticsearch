@@ -53,9 +53,6 @@ public class HealthMetadataService {
     private final MasterServiceTaskQueue<UpsertHealthMetadataTask> taskQueue;
     private volatile boolean enabled;
 
-    // Signifies that a node has been elected as master, but it was not able yet to publish its health metadata for
-    // other reasons for example not all nodes of the cluster are 8.5.0 or newer
-    private volatile boolean readyToPublishAsMaster = false;
     // Allows us to know if this node is the elected master without checking the cluster state, effectively protecting
     // us from checking the cluster state before the cluster state is initialized
     private volatile boolean isMaster = false;
@@ -129,43 +126,32 @@ public class HealthMetadataService {
         this.enabled = enabled;
         if (this.enabled) {
             clusterService.addListener(clusterStateListener);
-            resetHealthMetadata("health-node-enabled");
+            taskQueue.submitTask("health-node-enabled", () -> this.localHealthMetadata, null);
         } else {
             clusterService.removeListener(clusterStateListener);
-            readyToPublishAsMaster = false;
         }
     }
 
     private void updateOnClusterStateChange(ClusterChangedEvent event) {
-        final boolean wasMaster = event.previousState().nodes().isLocalNodeElectedMaster();
-        isMaster = event.localNodeMaster();
-        if (isMaster && wasMaster == false) {
-            readyToPublishAsMaster = true;
-        } else if (isMaster == false) {
-            readyToPublishAsMaster = false;
-        }
-
         // Avoid scheduling updates to the taskQueue in case the cluster is recovering.
         if (event.state().blocks().hasGlobalBlock(GatewayService.STATE_NOT_RECOVERED_BLOCK)) {
             return;
         }
+        final boolean prevIsMaster = this.isMaster;
+        if (prevIsMaster != event.localNodeMaster()) {
+            this.isMaster = event.localNodeMaster();
+        }
 
-        // Wait until every node in the cluster is upgraded to 8.5.0 or later
-        if (event.state().nodesIfRecovered().getMinNodeVersion().onOrAfter(Version.V_8_5_0)) {
-            if (readyToPublishAsMaster) {
-                resetHealthMetadata("health-metadata-update-master-election");
-                readyToPublishAsMaster = false;
-            } else if (isMaster) {
+        if (this.isMaster) {
+            // Wait until every node in the cluster is upgraded to 8.5.0 or later
+            if (event.state().nodesIfRecovered().getMinNodeVersion().onOrAfter(Version.V_8_5_0)) {
                 var currentStoredHealthMetadata = HealthMetadata.getFromClusterState(event.state());
-                if (currentStoredHealthMetadata != null && this.localHealthMetadata.equals(currentStoredHealthMetadata) == false) {
+                if (currentStoredHealthMetadata == null || this.localHealthMetadata.equals(currentStoredHealthMetadata) == false) {
+                    logger.info("updating health to {}", this.localHealthMetadata);
                     taskQueue.submitTask("health-metadata-update", () -> this.localHealthMetadata, null);
                 }
             }
         }
-    }
-
-    private void resetHealthMetadata(String source) {
-        taskQueue.submitTask(source, () -> this.localHealthMetadata, null);
     }
 
     public static List<NamedWriteableRegistry.Entry> getNamedWriteables() {
