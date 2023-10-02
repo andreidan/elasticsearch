@@ -16,8 +16,6 @@ import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.cluster.metadata.IndexMetadata.DownsampleTaskStatus;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.time.DateFormatter;
-import org.elasticsearch.common.time.FormatNames;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.IndexSettings;
@@ -38,7 +36,6 @@ import org.elasticsearch.xpack.core.rollup.ConfigTestHelpers;
 import org.junit.Before;
 
 import java.io.IOException;
-import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -63,6 +60,41 @@ public class DownsampleActionIT extends ESRestTestCase {
     private String dataStream;
 
     private static final String TEMPLATE = """
+        {
+            "index_patterns": ["%s*"],
+            "template": {
+                "settings":{
+                    "index": {
+                        "number_of_replicas": 0,
+                        "number_of_shards": 1,
+                        "time_series": {
+                          "start_time": "%s",
+                          "end_time": "%s"
+                        },                        "mode": "time_series",
+
+                        "lifecycle.name": "%s"
+                    }
+                },
+                "mappings":{
+                    "properties": {
+                        "@timestamp" : {
+                            "type": "date"
+                        },
+                        "metricset": {
+                            "type": "keyword",
+                            "time_series_dimension": true
+                        },
+                        "volume": {
+                            "type": "double",
+                            "time_series_metric": "gauge"
+                        }
+                    }
+                }
+            },
+            "data_stream": { }
+        }""";
+
+    private static final String TEMPLATE_NO_TIME_BOUNDARIES = """
         {
             "index_patterns": ["%s*"],
             "template": {
@@ -125,7 +157,7 @@ public class DownsampleActionIT extends ESRestTestCase {
             settings.put(IndexSettings.MODE.getKey(), IndexMode.TIME_SERIES)
                 .putList(IndexMetadata.INDEX_ROUTING_PATH.getKey(), List.of("metricset"))
                 .put(IndexSettings.TIME_SERIES_START_TIME.getKey(), "2006-01-08T23:40:53.384Z")
-                .put(IndexSettings.TIME_SERIES_END_TIME.getKey(), "2106-01-08T23:40:53.384Z");
+                .put(IndexSettings.TIME_SERIES_END_TIME.getKey(), "2021-01-08T23:40:53.384Z");
         }
 
         XContentBuilder builder = XContentFactory.jsonBuilder()
@@ -267,11 +299,12 @@ public class DownsampleActionIT extends ESRestTestCase {
 
         // Create a template
         Request createIndexTemplateRequest = new Request("POST", "/_index_template/" + dataStream);
-        createIndexTemplateRequest.setJsonEntity(Strings.format(TEMPLATE, dataStream, policy));
+        createIndexTemplateRequest.setJsonEntity(
+            Strings.format(TEMPLATE, dataStream, policy, "2006-01-08T23:40:53.384Z", "2021-01-08T23:40:53.384Z")
+        );
         assertOK(client().performRequest(createIndexTemplateRequest));
 
-        String now = DateFormatter.forPattern(FormatNames.STRICT_DATE_OPTIONAL_TIME.getName()).format(Instant.now());
-        index(client(), dataStream, true, null, "@timestamp", now, "volume", 11.0, "metricset", randomAlphaOfLength(5));
+        index(client(), dataStream, true, null, "@timestamp", "2020-01-01T05:10:00Z", "volume", 11.0, "metricset", randomAlphaOfLength(5));
 
         String backingIndexName = DataStream.getDefaultBackingIndexName(dataStream, 1);
         assertBusy(
@@ -283,6 +316,11 @@ public class DownsampleActionIT extends ESRestTestCase {
             30,
             TimeUnit.SECONDS
         );
+
+        // before we rollover, update template to not contain time boundaries anymore
+        Request updateIndexTemplateRequest = new Request("POST", "/_index_template/" + dataStream);
+        updateIndexTemplateRequest.setJsonEntity(Strings.format(TEMPLATE_NO_TIME_BOUNDARIES, dataStream, policy));
+        assertOK(client().performRequest(updateIndexTemplateRequest));
 
         // Manual rollover the original index such that it's not the write index in the data stream anymore
         rolloverMaxOneDocCondition(client(), dataStream);
@@ -343,11 +381,12 @@ public class DownsampleActionIT extends ESRestTestCase {
 
         // Create a template
         Request createIndexTemplateRequest = new Request("POST", "/_index_template/" + dataStream);
-        createIndexTemplateRequest.setJsonEntity(Strings.format(TEMPLATE, dataStream, policy));
+        createIndexTemplateRequest.setJsonEntity(
+            Strings.format(TEMPLATE, dataStream, "2006-01-08T23:40:53.384Z", "2021-01-08T23:40:53.384Z", policy)
+        );
         assertOK(client().performRequest(createIndexTemplateRequest));
 
-        String now = DateFormatter.forPattern(FormatNames.STRICT_DATE_OPTIONAL_TIME.getName()).format(Instant.now());
-        index(client(), dataStream, true, null, "@timestamp", now, "volume", 11.0, "metricset", randomAlphaOfLength(5));
+        index(client(), dataStream, true, null, "@timestamp", "2020-01-01T05:10:00Z", "volume", 11.0, "metricset", randomAlphaOfLength(5));
 
         String firstBackingIndex = DataStream.getDefaultBackingIndexName(dataStream, 1);
         logger.info("--> firstBackingIndex: {}", firstBackingIndex);
@@ -360,6 +399,11 @@ public class DownsampleActionIT extends ESRestTestCase {
             30,
             TimeUnit.SECONDS
         );
+
+        // before we rollover, update template to not contain time boundaries anymore
+        Request updateIndexTemplateRequest = new Request("POST", "/_index_template/" + dataStream);
+        updateIndexTemplateRequest.setJsonEntity(Strings.format(TEMPLATE_NO_TIME_BOUNDARIES, dataStream, policy));
+        assertOK(client().performRequest(updateIndexTemplateRequest));
 
         // Manual rollover the original index such that it's not the write index in the data stream anymore
         rolloverMaxOneDocCondition(client(), dataStream);
