@@ -17,6 +17,8 @@ import org.elasticsearch.action.admin.indices.stats.IndicesStatsAction;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsRequest;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsResponse;
 import org.elasticsearch.action.admin.indices.stats.ShardStats;
+import org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService;
+import org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingResult;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.ActiveShardsObserver;
 import org.elasticsearch.action.support.IndicesOptions;
@@ -44,7 +46,9 @@ import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.shard.DocsStats;
+import org.elasticsearch.index.shard.IndexingStats;
 import org.elasticsearch.tasks.CancellableTask;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -167,6 +171,15 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
         MetadataRolloverService.validateIndexName(clusterState, trialRolloverIndexName);
 
         boolean isDataStream = metadata.dataStreams().containsKey(rolloverRequest.getRolloverTarget());
+        final IndexAbstraction indexAbstraction = clusterState.metadata().getIndicesLookup().get(rolloverRequest.getRolloverTarget());
+        if (indexAbstraction.getType().equals(IndexAbstraction.Type.DATA_STREAM)) {
+            RolloverConditions conditionsIncludingImplicit = RolloverConditions.newBuilder(rolloverRequest.getConditions())
+                .addAutoShardingCondition(
+                    new AutoShardingResult(DataStreamAutoShardingService.AutoShardingType.SCALE_UP, 1, 3, TimeValue.ZERO)
+                )
+                .build();
+            rolloverRequest.setConditions(conditionsIncludingImplicit);
+        }
         if (rolloverRequest.isLazy()) {
             if (isDataStream == false || rolloverRequest.getConditions().hasConditions()) {
                 String message;
@@ -303,12 +316,21 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
                 .max()
                 .orElse(0);
 
+            double writeLoad = 0.0;
+            if (statsResponse != null) {
+                IndexingStats indexing = statsResponse.getTotal().getIndexing();
+                if (indexing != null) {
+                    writeLoad = indexing.getTotal().getWriteLoad();
+                }
+            }
+
             return new Condition.Stats(
                 docsStats == null ? 0 : docsStats.getCount(),
                 metadata.getCreationDate(),
                 ByteSizeValue.ofBytes(docsStats == null ? 0 : docsStats.getTotalSizeInBytes()),
                 ByteSizeValue.ofBytes(maxPrimaryShardSize),
-                maxPrimaryShardDocs
+                maxPrimaryShardDocs,
+                writeLoad
             );
         }
     }
@@ -371,6 +393,16 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
         ) throws Exception {
             final var rolloverTask = rolloverTaskContext.getTask();
             final var rolloverRequest = rolloverTask.rolloverRequest();
+
+            final IndexAbstraction indexAbstraction = currentState.metadata().getIndicesLookup().get(rolloverRequest.getRolloverTarget());
+            if (indexAbstraction.getType().equals(IndexAbstraction.Type.DATA_STREAM)) {
+                RolloverConditions conditionsIncludingImplicit = RolloverConditions.newBuilder(rolloverRequest.getConditions())
+                    .addAutoShardingCondition(
+                        new AutoShardingResult(DataStreamAutoShardingService.AutoShardingType.SCALE_UP, 1, 3, TimeValue.ZERO)
+                    )
+                    .build();
+                rolloverRequest.setConditions(conditionsIncludingImplicit);
+            }
 
             // Regenerate the rollover names, as a rollover could have happened in between the pre-check and the cluster state update
             final var rolloverNames = MetadataRolloverService.resolveRolloverNames(

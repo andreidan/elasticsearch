@@ -21,11 +21,12 @@ import java.util.Objects;
 public abstract class Condition<T> implements NamedWriteable, ToXContentFragment {
 
     /**
-     * Describes the type of condition - a min_* condition (MIN) or max_* condition (MAX).
+     * Describes the type of condition - a min_* condition (MIN), max_* condition (MAX), or an internal (usually) condition
      */
     public enum Type {
         MIN,
-        MAX
+        MAX,
+        INTERNAL
     }
 
     protected T value;
@@ -89,7 +90,8 @@ public abstract class Condition<T> implements NamedWriteable, ToXContentFragment
         long indexCreated,
         ByteSizeValue indexSize,
         ByteSizeValue maxPrimaryShardSize,
-        long maxPrimaryShardDocs
+        long maxPrimaryShardDocs,
+        double writeIndexLoad
     ) {}
 
     /**

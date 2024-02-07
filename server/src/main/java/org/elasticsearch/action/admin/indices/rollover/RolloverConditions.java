@@ -7,6 +7,7 @@
  */
 package org.elasticsearch.action.admin.indices.rollover;
 
+import org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingResult;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -243,7 +244,12 @@ public class RolloverConditions implements Writeable, ToXContentObject {
             .filter(c -> Condition.Type.MAX == c.type())
             .anyMatch(c -> conditionResults.getOrDefault(c.toString(), false));
 
-        return conditionResults.size() == 0 || (allMinConditionsMet && anyMaxConditionsMet);
+        boolean anyImplicitConditionsMet = conditions.values()
+            .stream()
+            .filter(c -> Condition.Type.INTERNAL == c.type())
+            .anyMatch(c -> conditionResults.getOrDefault(c.toString(), false));
+
+        return conditionResults.size() == 0 || (allMinConditionsMet && anyMaxConditionsMet) || anyImplicitConditionsMet;
     }
 
     public static RolloverConditions fromXContent(XContentParser parser) throws IOException {
@@ -405,6 +411,15 @@ public class RolloverConditions implements Writeable, ToXContentObject {
                 MinPrimaryShardDocsCondition minPrimaryShardDocsCondition = new MinPrimaryShardDocsCondition(numDocs);
                 this.conditions.put(minPrimaryShardDocsCondition.name, minPrimaryShardDocsCondition);
             }
+            return this;
+        }
+
+        /**
+         * Adds an auto sharding scale up condition.
+         */
+        public Builder addAutoShardingCondition(AutoShardingResult autoShardingResult) {
+            AutoShardingCondition autoShardingCondition = new AutoShardingCondition(autoShardingResult);
+            this.conditions.put(autoShardingCondition.name, autoShardingCondition);
             return this;
         }
 

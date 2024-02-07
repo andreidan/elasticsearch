@@ -93,7 +93,8 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
         var lifecycle = instance.getLifecycle();
         var failureStore = instance.isFailureStore();
         var failureIndices = instance.getFailureIndices();
-        switch (between(0, 10)) {
+        var autoShardingEvent = instance.getAutoShardingEvent();
+        switch (between(0, 11)) {
             case 0 -> name = randomAlphaOfLength(10);
             case 1 -> indices = randomValueOtherThan(List.of(), DataStreamTestHelper::randomIndexInstances);
             case 2 -> generation = instance.getGeneration() + randomIntBetween(1, 10);
@@ -130,6 +131,16 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
                     failureStore = true;
                 }
             }
+            case 11 -> {
+                autoShardingEvent = randomBoolean() && autoShardingEvent != null
+                    ? null
+                    : new DataStreamAutoShardingEvent(
+                        indices.get(indices.size() - 1).getName(),
+                        generation,
+                        randomIntBetween(1, 10),
+                        randomMillisUpToYear9999()
+                    );
+            }
         }
 
         return new DataStream(
@@ -144,7 +155,8 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
             indexMode,
             lifecycle,
             failureStore,
-            failureIndices
+            failureIndices,
+            autoShardingEvent
         );
     }
 
@@ -201,7 +213,8 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
             indexMode,
             ds.getLifecycle(),
             ds.isFailureStore(),
-            ds.getFailureIndices()
+            ds.getFailureIndices(),
+            ds.getAutoShardingEvent()
         );
         var newCoordinates = ds.nextWriteIndexAndGeneration(Metadata.EMPTY_METADATA);
 
@@ -228,7 +241,8 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
             IndexMode.TIME_SERIES,
             ds.getLifecycle(),
             ds.isFailureStore(),
-            ds.getFailureIndices()
+            ds.getFailureIndices(),
+            ds.getAutoShardingEvent()
         );
         var newCoordinates = ds.nextWriteIndexAndGeneration(Metadata.EMPTY_METADATA);
 
@@ -590,7 +604,8 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
             preSnapshotDataStream.getIndexMode(),
             preSnapshotDataStream.getLifecycle(),
             preSnapshotDataStream.isFailureStore(),
-            preSnapshotDataStream.getFailureIndices()
+            preSnapshotDataStream.getFailureIndices(),
+            preSnapshotDataStream.getAutoShardingEvent()
         );
 
         var reconciledDataStream = postSnapshotDataStream.snapshot(
@@ -634,7 +649,8 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
             preSnapshotDataStream.getIndexMode(),
             preSnapshotDataStream.getLifecycle(),
             preSnapshotDataStream.isFailureStore(),
-            preSnapshotDataStream.getFailureIndices()
+            preSnapshotDataStream.getFailureIndices(),
+            preSnapshotDataStream.getAutoShardingEvent()
         );
 
         assertNull(postSnapshotDataStream.snapshot(preSnapshotDataStream.getIndices().stream().map(Index::getName).toList()));
@@ -1654,7 +1670,8 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
             lifecycle,
             failureStore,
             failureIndices,
-            false
+            false,
+            null
         );
 
         try (XContentBuilder builder = XContentBuilder.builder(XContentType.JSON.xContent())) {
