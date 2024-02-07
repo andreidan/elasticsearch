@@ -11,6 +11,7 @@ package org.elasticsearch.action.admin.indices.rollover;
 import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.NamedWriteable;
 import org.elasticsearch.common.unit.ByteSizeValue;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.xcontent.ToXContentFragment;
 
 import java.util.Objects;
@@ -20,13 +21,14 @@ import java.util.Objects;
  */
 public abstract class Condition<T> implements NamedWriteable, ToXContentFragment {
 
-    /**
-     * Describes the type of condition - a min_* condition (MIN), max_* condition (MAX), or an internal (usually) condition
+    /*
+     * Describes the type of condition - a min_* condition (MIN), max_* condition (MAX), or an automatic condition (automatic conditions
+     * are something that the platform configures and manages)
      */
     public enum Type {
         MIN,
         MAX,
-        INTERNAL
+        AUTOMATIC
     }
 
     protected T value;
@@ -91,7 +93,7 @@ public abstract class Condition<T> implements NamedWriteable, ToXContentFragment
         ByteSizeValue indexSize,
         ByteSizeValue maxPrimaryShardSize,
         long maxPrimaryShardDocs,
-        double writeIndexLoad
+        @Nullable Double writeIndexLoad
     ) {}
 
     /**

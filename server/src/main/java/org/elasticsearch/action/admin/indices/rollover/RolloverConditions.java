@@ -244,12 +244,12 @@ public class RolloverConditions implements Writeable, ToXContentObject {
             .filter(c -> Condition.Type.MAX == c.type())
             .anyMatch(c -> conditionResults.getOrDefault(c.toString(), false));
 
-        boolean anyImplicitConditionsMet = conditions.values()
+        boolean anyInternalConditionsMet = conditions.values()
             .stream()
-            .filter(c -> Condition.Type.INTERNAL == c.type())
+            .filter(c -> Condition.Type.AUTOMATIC == c.type())
             .anyMatch(c -> conditionResults.getOrDefault(c.toString(), false));
 
-        return conditionResults.size() == 0 || (allMinConditionsMet && anyMaxConditionsMet) || anyImplicitConditionsMet;
+        return conditionResults.size() == 0 || (allMinConditionsMet && anyMaxConditionsMet) || anyInternalConditionsMet;
     }
 
     public static RolloverConditions fromXContent(XContentParser parser) throws IOException {
