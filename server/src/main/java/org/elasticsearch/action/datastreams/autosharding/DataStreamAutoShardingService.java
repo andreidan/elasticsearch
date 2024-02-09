@@ -20,6 +20,7 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.common.regex.Regex;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.Nullable;
@@ -48,7 +49,6 @@ public class DataStreamAutoShardingService {
 
     public static final NodeFeature DATA_STREAM_AUTO_SHARDING_FEATURE = new NodeFeature("data_stream.auto_sharding");
 
-    // TODO implement parser and take this setting into account
     public static final Setting<List<String>> DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING = Setting.listSetting(
         "data_streams.auto_sharding.excludes",
         List.of("*"),
@@ -108,6 +108,7 @@ public class DataStreamAutoShardingService {
     private volatile TimeValue reduceShardsCooldown;
     private volatile int minNumberWriteThreads;
     private volatile int maxNumberWriteThreads;
+    private volatile List<String> dataStreamExcludePatterns;
 
     public enum AutoShardingType {
         INCREASE_NUMBER_OF_SHARDS,
@@ -120,8 +121,8 @@ public class DataStreamAutoShardingService {
      * Represents an auto sharding recommendation. It includes the current and target number of shards together with a remaining cooldown
      * period that needs to lapse before the current recommendation should be applied.
      * <p>
-     * If auto sharding is not applicable for a data stream (e.g. due to {@link #DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING}) the target number
-     * of shards will be 0 and cool down remaining {@link TimeValue#MAX_VALUE}.
+     * If auto sharding is not applicable for a data stream (e.g. due to {@link #DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING}) the target
+     * number of shards will be 0 and cool down remaining {@link TimeValue#MAX_VALUE}.
      */
     public record AutoShardingResult(
         AutoShardingType type,
@@ -204,6 +205,7 @@ public class DataStreamAutoShardingService {
         this.reduceShardsCooldown = DATA_STREAMS_AUTO_SHARDING_DECREASE_SHARDS_COOLDOWN.get(settings);
         this.minNumberWriteThreads = CLUSTER_AUTO_SHARDING_MIN_NUMBER_WRITE_THREADS.get(settings);
         this.maxNumberWriteThreads = CLUSTER_AUTO_SHARDING_MAX_NUMBER_WRITE_THREADS.get(settings);
+        this.dataStreamExcludePatterns = DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING.get(settings);
         this.featureService = featureService;
         this.nowSupplier = nowSupplier;
     }
@@ -217,6 +219,8 @@ public class DataStreamAutoShardingService {
             .addSettingsUpdateConsumer(CLUSTER_AUTO_SHARDING_MIN_NUMBER_WRITE_THREADS, this::updateMinNumberWriteThreads);
         clusterService.getClusterSettings()
             .addSettingsUpdateConsumer(CLUSTER_AUTO_SHARDING_MAX_NUMBER_WRITE_THREADS, this::updateMaxNumberWriteThreads);
+        clusterService.getClusterSettings()
+            .addSettingsUpdateConsumer(DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING, this::updateDataStreamExcludePatterns);
     }
 
     /**
@@ -224,9 +228,9 @@ public class DataStreamAutoShardingService {
      * increase the number of shards, whilst the heuristics for decreasing the number of shards _might_ use the provide write indexing
      * load).
      * The result type will indicate the recommendation of the auto sharding service :
-     * - not applicable if the data stream is excluded from auto sharding as configured by {@link #DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING} or
-     * if the auto sharding functionality is disabled according to {@link #DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING}, or if the cluster
-     * doesn't have the feature available
+     * - not applicable if the data stream is excluded from auto sharding as configured by {@link #DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING}
+     * or if the auto sharding functionality is disabled according to {@link #DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING}, or if the
+     * cluster doesn't have the feature available
      * - increase number of shards if the optimal number of shards it deems necessary for the provided data stream is GT the current number
      * of shards
      * - decrease the number of shards if the optimal number of shards it deems necessary for the provided data stream is LT the current
@@ -248,7 +252,14 @@ public class DataStreamAutoShardingService {
             return new AutoShardingResult(AutoShardingType.NOT_APPLICABLE, 0, 0, TimeValue.MAX_VALUE, null);
         }
 
-        // TODO validate the data stream against DATA_STREAMS_AUTO_SHARDING_EXCLUDES
+        if (dataStreamExcludePatterns.stream().anyMatch(pattern -> Regex.simpleMatch(pattern, dataStream.getName()))) {
+            logger.debug(
+                "Data stream [{}] is excluded from auto sharding via the [{}] setting",
+                dataStream.getName(),
+                DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING.getKey()
+            );
+            return new AutoShardingResult(AutoShardingType.NOT_APPLICABLE, 0, 0, TimeValue.MAX_VALUE, null);
+        }
 
         if (writeIndexLoad == null) {
             logger.debug(
@@ -264,10 +275,7 @@ public class DataStreamAutoShardingService {
     // visible for testing
     AutoShardingResult innerCalculate(Metadata metadata, DataStream dataStream, double writeIndexLoad, LongSupplier nowSupplier) {
         // increasing the number of shards is calculated solely based on the index load of the write index
-        long optimalIncreaseShardsNumber = Math.max(
-            Math.min(Math.round(writeIndexLoad / ((double) minNumberWriteThreads / 2)), 3),
-            Math.round(writeIndexLoad / ((double) maxNumberWriteThreads / 2))
-        );
+        long optimalIncreaseShardsNumber = computeOptimalNumberOfShards(writeIndexLoad);
         IndexMetadata writeIndex = metadata.index(dataStream.getWriteIndex());
         assert writeIndex != null : "the data stream write index must exist in the provided cluster metadata";
         TimeValue timeSinceLastAutoShardingEvent = dataStream.getAutoShardingEvent() != null
@@ -289,6 +297,42 @@ public class DataStreamAutoShardingService {
             );
         }
 
+        double maxIndexLoadWithinCoolingPeriod = getMaxIndexLoadWithinCoolingPeriod(metadata, dataStream, writeIndexLoad, nowSupplier);
+        long targetReducedNumberOfShards = computeOptimalNumberOfShards(maxIndexLoadWithinCoolingPeriod);
+
+        if (targetReducedNumberOfShards < writeIndex.getNumberOfShards()) {
+            // we should reduce the number of shards
+            return new AutoShardingResult(
+                AutoShardingType.DECREASES_NUMBER_OF_SHARDS,
+                writeIndex.getNumberOfShards(),
+                Math.toIntExact(targetReducedNumberOfShards),
+                TimeValue.timeValueMillis(Math.max(0L, reduceShardsCooldown.millis() - timeSinceLastAutoShardingEvent.millis())),
+                maxIndexLoadWithinCoolingPeriod
+            );
+        }
+
+        return new AutoShardingResult(
+            AutoShardingType.NO_CHANGE_REQUIRED,
+            writeIndex.getNumberOfShards(),
+            writeIndex.getNumberOfShards(),
+            TimeValue.ZERO,
+            writeIndexLoad
+        );
+    }
+
+    private long computeOptimalNumberOfShards(double indexingLoad) {
+        return Math.max(
+            Math.min(Math.round(indexingLoad / ((double) minNumberWriteThreads / 2)), 3),
+            Math.round(indexingLoad / ((double) maxNumberWriteThreads / 2))
+        );
+    }
+
+    private double getMaxIndexLoadWithinCoolingPeriod(
+        Metadata metadata,
+        DataStream dataStream,
+        double writeIndexLoad,
+        LongSupplier nowSupplier
+    ) {
         // for reducing the number of shards we look at more than just the write index
         List<IndexWriteLoad> writeLoadsWithinCoolingPeriod = getIndicesCreatedWithin(
             metadata,
@@ -320,30 +364,7 @@ public class DataStreamAutoShardingService {
                 maxIndexLoadWithinCoolingPeriod = totalIndexLoad;
             }
         }
-
-        long targetReducedNumberOfShards = Math.max(
-            Math.min(Math.round(maxIndexLoadWithinCoolingPeriod / ((double) minNumberWriteThreads / 2)), 3),
-            Math.round(maxIndexLoadWithinCoolingPeriod / ((double) maxNumberWriteThreads / 2))
-        );
-
-        if (targetReducedNumberOfShards < writeIndex.getNumberOfShards()) {
-            // we should reduce the number of shards
-            return new AutoShardingResult(
-                AutoShardingType.DECREASES_NUMBER_OF_SHARDS,
-                writeIndex.getNumberOfShards(),
-                Math.toIntExact(targetReducedNumberOfShards),
-                TimeValue.timeValueMillis(Math.max(0L, reduceShardsCooldown.millis() - timeSinceLastAutoShardingEvent.millis())),
-                maxIndexLoadWithinCoolingPeriod
-            );
-        }
-
-        return new AutoShardingResult(
-            AutoShardingType.NO_CHANGE_REQUIRED,
-            writeIndex.getNumberOfShards(),
-            writeIndex.getNumberOfShards(),
-            TimeValue.ZERO,
-            writeIndexLoad
-        );
+        return maxIndexLoadWithinCoolingPeriod;
     }
 
     // Visible for testing
@@ -379,5 +400,9 @@ public class DataStreamAutoShardingService {
 
     void updateMaxNumberWriteThreads(int maxNumberWriteThreads) {
         this.maxNumberWriteThreads = maxNumberWriteThreads;
+    }
+
+    private void updateDataStreamExcludePatterns(List<String> newExcludePatterns) {
+        this.dataStreamExcludePatterns = newExcludePatterns;
     }
 }

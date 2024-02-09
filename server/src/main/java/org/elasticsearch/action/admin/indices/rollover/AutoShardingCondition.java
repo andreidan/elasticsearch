@@ -35,7 +35,7 @@ public class AutoShardingCondition extends Condition<AutoShardingResult> {
     public AutoShardingCondition(AutoShardingResult autoShardingResult) {
         super(NAME, Type.AUTOMATIC);
         this.value = autoShardingResult;
-        this.isConditionMet = value.type() == INCREASE_NUMBER_OF_SHARDS && value.coolDownRemaining().equals(TimeValue.ZERO);
+        this.isConditionMet = (value.type() == INCREASE_NUMBER_OF_SHARDS && value.coolDownRemaining().equals(TimeValue.ZERO));
     }
 
     public AutoShardingCondition(StreamInput in) throws IOException {
@@ -76,7 +76,13 @@ public class AutoShardingCondition extends Condition<AutoShardingResult> {
     public static AutoShardingCondition fromXContent(XContentParser parser) throws IOException {
         if (parser.nextToken() == XContentParser.Token.START_OBJECT) {
             return new AutoShardingCondition(
-                new AutoShardingResult(INCREASE_NUMBER_OF_SHARDS, parser.intValue(), parser.intValue(), TimeValue.ZERO, parser.doubleValue())
+                new AutoShardingResult(
+                    INCREASE_NUMBER_OF_SHARDS,
+                    parser.intValue(),
+                    parser.intValue(),
+                    TimeValue.ZERO,
+                    parser.doubleValue()
+                )
             );
         } else {
             throw new IllegalArgumentException("invalid token when parsing " + NAME + " condition: " + parser.currentToken());

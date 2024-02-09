@@ -124,6 +124,7 @@ public final class LazyRolloverAction extends ActionType<RolloverResponse> {
                 new RolloverRequest(rolloverRequest.getRolloverTarget(), null),
                 null,
                 trialRolloverResponse,
+                null,
                 listener
             );
             submitRolloverTask(rolloverRequest, source, rolloverTask);
