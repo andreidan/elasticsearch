@@ -67,8 +67,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingType.NOT_APPLICABLE;
 import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingType.INCREASE_NUMBER_OF_SHARDS;
+import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingType.NOT_APPLICABLE;
 
 /**
  * Main class to swap the index pointed to by an alias, given some conditions
@@ -239,13 +239,20 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
                 final IndexAbstraction indexAbstraction = clusterState.metadata()
                     .getIndicesLookup()
                     .get(rolloverRequest.getRolloverTarget());
-                Condition.Stats stats = buildStats(metadata.index(trialSourceIndexName), statsResponse);
                 if (indexAbstraction.getType().equals(IndexAbstraction.Type.DATA_STREAM)) {
                     DataStream dataStream = (DataStream) indexAbstraction;
+                    Double writeLoad = null;
+                    if (statsResponse != null) {
+                        IndexingStats indexing = statsResponse.getTotal().getIndexing();
+                        if (indexing != null) {
+                            writeLoad = indexing.getTotal().getWriteLoad();
+                        }
+                    }
+
                     AutoShardingResult autoShardingResult = dataStreamAutoShardingService.calculate(
                         clusterState,
                         dataStream,
-                        stats.writeIndexLoad()
+                        writeLoad
                     );
                     if (autoShardingResult.type().equals(NOT_APPLICABLE) == false) {
                         logger.debug("data stream auto sharding result is [{}]", autoShardingResult);
@@ -273,7 +280,10 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
                 }
 
                 // Evaluate the conditions, so that we can tell without a cluster state update whether a rollover would occur.
-                final Map<String, Boolean> trialConditionResults = evaluateConditions(rolloverRequest.getConditionValues(), stats);
+                final Map<String, Boolean> trialConditionResults = evaluateConditions(
+                    rolloverRequest.getConditionValues(),
+                    buildStats(metadata.index(trialSourceIndexName), statsResponse)
+                );
 
                 final RolloverResponse trialRolloverResponse = new RolloverResponse(
                     trialSourceIndexName,
@@ -351,21 +361,12 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
                 .max()
                 .orElse(0);
 
-            Double writeLoad = null;
-            if (statsResponse != null) {
-                IndexingStats indexing = statsResponse.getTotal().getIndexing();
-                if (indexing != null) {
-                    writeLoad = indexing.getTotal().getWriteLoad();
-                }
-            }
-
             return new Condition.Stats(
                 docsStats == null ? 0 : docsStats.getCount(),
                 metadata.getCreationDate(),
                 ByteSizeValue.ofBytes(docsStats == null ? 0 : docsStats.getTotalSizeInBytes()),
                 ByteSizeValue.ofBytes(maxPrimaryShardSize),
-                maxPrimaryShardDocs,
-                writeLoad
+                maxPrimaryShardDocs
             );
         }
     }
@@ -464,6 +465,7 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
 
                 if (indexAbstraction.getType().equals(IndexAbstraction.Type.DATA_STREAM)) {
                     // TODO: we scale down the number of shards only when rolling over due to other conditions
+
                 }
 
                 // Perform the actual rollover

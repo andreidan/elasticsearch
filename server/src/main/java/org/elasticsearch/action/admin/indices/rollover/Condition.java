@@ -11,7 +11,6 @@ package org.elasticsearch.action.admin.indices.rollover;
 import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.NamedWriteable;
 import org.elasticsearch.common.unit.ByteSizeValue;
-import org.elasticsearch.core.Nullable;
 import org.elasticsearch.xcontent.ToXContentFragment;
 
 import java.util.Objects;
@@ -92,8 +91,7 @@ public abstract class Condition<T> implements NamedWriteable, ToXContentFragment
         long indexCreated,
         ByteSizeValue indexSize,
         ByteSizeValue maxPrimaryShardSize,
-        long maxPrimaryShardDocs,
-        @Nullable Double writeIndexLoad
+        long maxPrimaryShardDocs
     ) {}
 
     /**

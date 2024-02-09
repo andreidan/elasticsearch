@@ -149,10 +149,6 @@ public class DataStreamIT extends ESIntegTestCase {
     }
 
     public void testBasicScenario() throws Exception {
-        internalCluster().startMasterOnlyNode();
-        internalCluster().startMasterOnlyNode();
-        internalCluster().startDataOnlyNode();
-        internalCluster().startDataOnlyNode();
         List<String> backingIndices = new ArrayList<>(4);
         putComposableIndexTemplate("id1", List.of("metrics-foo*"));
         CreateDataStreamAction.Request createDataStreamRequest = new CreateDataStreamAction.Request("metrics-foo");
