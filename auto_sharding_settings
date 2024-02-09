@@ -1,0 +1,20 @@
+# global setting to enable auto_sharding
+data_streams.auto_sharding.enabled (defaults to false, configured to true in Serverless)
+
+# cluster level setting to configure data stream names to exclude
+data_streams.auto_sharding.excludes
+
+# scale_up cool down
+data_streams.auto_sharding.scale_out_cooldown (default 15m)
+
+# scale_down cool down
+data_streams.auto_sharding.scale_down_cooldown (default 3d)
+
+# low 
+cluster.auto_sharding.number_of_write_threads.low: 2
+
+# high
+cluster.auto_sharding.number_of_write_threads.high: 32
+
+
+
