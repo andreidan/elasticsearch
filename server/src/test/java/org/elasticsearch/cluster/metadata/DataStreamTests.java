@@ -39,6 +39,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -163,7 +164,7 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
     public void testRollover() {
         DataStream ds = DataStreamTestHelper.randomInstance().promoteDataStream();
         Tuple<String, Long> newCoordinates = ds.nextWriteIndexAndGeneration(Metadata.EMPTY_METADATA);
-        final DataStream rolledDs = ds.rollover(new Index(newCoordinates.v1(), UUIDs.randomBase64UUID()), newCoordinates.v2(), false);
+        final DataStream rolledDs = ds.rollover(new Index(newCoordinates.v1(), UUIDs.randomBase64UUID()), newCoordinates.v2(), false, null);
         assertThat(rolledDs.getName(), equalTo(ds.getName()));
         assertThat(rolledDs.getGeneration(), equalTo(ds.getGeneration() + 1));
         assertThat(rolledDs.getIndices().size(), equalTo(ds.getIndices().size() + 1));
@@ -188,7 +189,7 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
         }
 
         final Tuple<String, Long> newCoordinates = ds.nextWriteIndexAndGeneration(builder.build());
-        final DataStream rolledDs = ds.rollover(new Index(newCoordinates.v1(), UUIDs.randomBase64UUID()), newCoordinates.v2(), false);
+        final DataStream rolledDs = ds.rollover(new Index(newCoordinates.v1(), UUIDs.randomBase64UUID()), newCoordinates.v2(), false, null);
         assertThat(rolledDs.getName(), equalTo(ds.getName()));
         assertThat(rolledDs.getGeneration(), equalTo(ds.getGeneration() + numConflictingIndices + 1));
         assertThat(rolledDs.getIndices().size(), equalTo(ds.getIndices().size() + 1));
@@ -218,7 +219,7 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
         );
         var newCoordinates = ds.nextWriteIndexAndGeneration(Metadata.EMPTY_METADATA);
 
-        var rolledDs = ds.rollover(new Index(newCoordinates.v1(), UUIDs.randomBase64UUID()), newCoordinates.v2(), true);
+        var rolledDs = ds.rollover(new Index(newCoordinates.v1(), UUIDs.randomBase64UUID()), newCoordinates.v2(), true, null);
         assertThat(rolledDs.getName(), equalTo(ds.getName()));
         assertThat(rolledDs.getGeneration(), equalTo(ds.getGeneration() + 1));
         assertThat(rolledDs.getIndices().size(), equalTo(ds.getIndices().size() + 1));
@@ -246,7 +247,7 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
         );
         var newCoordinates = ds.nextWriteIndexAndGeneration(Metadata.EMPTY_METADATA);
 
-        var rolledDs = ds.rollover(new Index(newCoordinates.v1(), UUIDs.randomBase64UUID()), newCoordinates.v2(), false);
+        var rolledDs = ds.rollover(new Index(newCoordinates.v1(), UUIDs.randomBase64UUID()), newCoordinates.v2(), false, null);
         assertThat(rolledDs.getName(), equalTo(ds.getName()));
         assertThat(rolledDs.getGeneration(), equalTo(ds.getGeneration() + 1));
         assertThat(rolledDs.getIndices().size(), equalTo(ds.getIndices().size() + 1));
@@ -1686,6 +1687,99 @@ public class DataStreamTests extends AbstractXContentSerializingTestCase<DataStr
                 assertThat(serialized, containsString(label));
             }
         }
+    }
+
+    public void testGetIndicesWithinMaxAgeRange() {
+        final TimeValue maxIndexAge = TimeValue.timeValueDays(7);
+
+        final Metadata.Builder metadataBuilder = Metadata.builder();
+        final int numberOfBackingIndicesOlderThanMinAge = randomIntBetween(0, 10);
+        final int numberOfBackingIndicesWithinMinAnge = randomIntBetween(0, 10);
+        final int numberOfShards = 1;
+        final List<Index> backingIndices = new ArrayList<>();
+        final String dataStreamName = "logs-es";
+        final List<Index> backingIndicesOlderThanMinAge = new ArrayList<>();
+        for (int i = 0; i < numberOfBackingIndicesOlderThanMinAge; i++) {
+            long creationDate = System.currentTimeMillis() - maxIndexAge.millis() * 2;
+            final IndexMetadata indexMetadata = createIndexMetadata(
+                DataStream.getDefaultBackingIndexName(dataStreamName, backingIndices.size(), creationDate),
+                randomIndexWriteLoad(numberOfShards),
+                creationDate
+            );
+            backingIndices.add(indexMetadata.getIndex());
+            backingIndicesOlderThanMinAge.add(indexMetadata.getIndex());
+            metadataBuilder.put(indexMetadata, false);
+        }
+
+        final List<Index> backingIndicesWithinMinAge = new ArrayList<>();
+        for (int i = 0; i < numberOfBackingIndicesWithinMinAnge; i++) {
+            final long createdAt = System.currentTimeMillis() - (maxIndexAge.getMillis() / 2);
+            final IndexMetadata indexMetadata = createIndexMetadata(
+                DataStream.getDefaultBackingIndexName(dataStreamName, backingIndices.size(), createdAt),
+                randomIndexWriteLoad(numberOfShards),
+                createdAt
+            );
+            backingIndices.add(indexMetadata.getIndex());
+            backingIndicesWithinMinAge.add(indexMetadata.getIndex());
+            metadataBuilder.put(indexMetadata, false);
+        }
+
+        final String writeIndexName = DataStream.getDefaultBackingIndexName(dataStreamName, backingIndices.size());
+        final IndexMetadata writeIndexMetadata = createIndexMetadata(writeIndexName, null, System.currentTimeMillis());
+        backingIndices.add(writeIndexMetadata.getIndex());
+        metadataBuilder.put(writeIndexMetadata, false);
+
+        final DataStream dataStream = new DataStream(
+            dataStreamName,
+            backingIndices,
+            backingIndices.size(),
+            Collections.emptyMap(),
+            false,
+            false,
+            false,
+            false,
+            IndexMode.STANDARD
+        );
+
+        metadataBuilder.put(dataStream);
+
+        final List<Index> indicesWithinMaxAgeRange = DataStream.getIndicesWithinMaxAgeRange(
+            dataStream,
+            metadataBuilder::getSafe,
+            maxIndexAge,
+            System::currentTimeMillis
+        );
+
+        final List<Index> expectedIndicesWithinMaxAgeRange = new ArrayList<>();
+        if (numberOfBackingIndicesOlderThanMinAge > 0) {
+            expectedIndicesWithinMaxAgeRange.add(backingIndicesOlderThanMinAge.get(backingIndicesOlderThanMinAge.size() - 1));
+        }
+        expectedIndicesWithinMaxAgeRange.addAll(backingIndicesWithinMinAge);
+        expectedIndicesWithinMaxAgeRange.add(writeIndexMetadata.getIndex());
+
+        assertThat(indicesWithinMaxAgeRange, is(equalTo(expectedIndicesWithinMaxAgeRange)));
+    }
+
+    private IndexWriteLoad randomIndexWriteLoad(int numberOfShards) {
+        IndexWriteLoad.Builder builder = IndexWriteLoad.builder(numberOfShards);
+        for (int shardId = 0; shardId < numberOfShards; shardId++) {
+            builder.withShardWriteLoad(shardId, randomDoubleBetween(0, 64, true), randomLongBetween(1, 10));
+        }
+        return builder.build();
+    }
+
+    private IndexMetadata createIndexMetadata(String indexName, IndexWriteLoad indexWriteLoad, long createdAt) {
+        return IndexMetadata.builder(indexName)
+            .settings(
+                Settings.builder()
+                    .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                    .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
+                    .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
+                    .build()
+            )
+            .stats(indexWriteLoad == null ? null : new IndexMetadataStats(indexWriteLoad, 1, 1))
+            .creationDate(createdAt)
+            .build();
     }
 
     private record DataStreamMetadata(Long creationTimeInMillis, Long rolloverTimeInMillis, Long originationTimeInMillis) {

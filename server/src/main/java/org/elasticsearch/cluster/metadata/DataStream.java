@@ -1215,6 +1215,29 @@ public final class DataStream implements SimpleDiffable<DataStream>, ToXContentO
         "strict_date_optional_time_nanos||strict_date_optional_time||epoch_millis"
     );
 
+    public static List<Index> getIndicesWithinMaxAgeRange(
+        DataStream dataStream,
+        Function<Index, IndexMetadata> indexProvider,
+        TimeValue maxIndexAge,
+        LongSupplier nowSupplier
+    ) {
+        final List<Index> dataStreamIndices = dataStream.getIndices();
+        final long currentTimeMillis = nowSupplier.getAsLong();
+        // Consider at least 1 index (including the write index) for cases where rollovers happen less often than maxIndexAge
+        int firstIndexWithinAgeRange = Math.max(dataStreamIndices.size() - 2, 0);
+        for (int i = 0; i < dataStreamIndices.size(); i++) {
+            Index index = dataStreamIndices.get(i);
+            final IndexMetadata indexMetadata = indexProvider.apply(index);
+            final long indexAge = currentTimeMillis - indexMetadata.getCreationDate();
+            if (indexAge < maxIndexAge.getMillis()) {
+                // We need to consider the previous index too in order to cover the entire max-index-age range.
+                firstIndexWithinAgeRange = i == 0 ? 0 : i - 1;
+                break;
+            }
+        }
+        return dataStreamIndices.subList(firstIndexWithinAgeRange, dataStreamIndices.size());
+    }
+
     private static Instant getTimeStampFromRaw(Object rawTimestamp) {
         try {
             if (rawTimestamp instanceof Long lTimestamp) {

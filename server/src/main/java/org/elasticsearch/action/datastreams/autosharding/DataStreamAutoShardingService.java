@@ -27,7 +27,6 @@ import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.features.FeatureService;
 import org.elasticsearch.features.NodeFeature;
-import org.elasticsearch.index.Index;
 import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.ToXContentObject;
 import org.elasticsearch.xcontent.XContentBuilder;
@@ -58,7 +57,7 @@ public class DataStreamAutoShardingService {
     );
 
     /**
-     * Represents the minimum amount of time between two scaling events that'll increase the number of shards.
+     * Represents the minimum amount of time between two scaling events if the next event will increase the number of shards.
      */
     public static final Setting<TimeValue> DATA_STREAMS_AUTO_SHARDING_INCREASE_SHARDS_COOLDOWN = Setting.timeSetting(
         "data_streams.auto_sharding.increase_shards.cooldown",
@@ -69,7 +68,7 @@ public class DataStreamAutoShardingService {
     );
 
     /**
-     * Represents the minimum amount of time between two scaling events that'll reduce the number of shards.
+     * Represents the minimum amount of time between two scaling events if the next event will reduce the number of shards.
      */
     public static final Setting<TimeValue> DATA_STREAMS_AUTO_SHARDING_DECREASE_SHARDS_COOLDOWN = Setting.timeSetting(
         "data_streams.auto_sharding.decrease_shards.cooldown",
@@ -228,9 +227,9 @@ public class DataStreamAutoShardingService {
      * increase the number of shards, whilst the heuristics for decreasing the number of shards _might_ use the provide write indexing
      * load).
      * The result type will indicate the recommendation of the auto sharding service :
-     * - not applicable if the data stream is excluded from auto sharding as configured by {@link #DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING}
-     * or if the auto sharding functionality is disabled according to {@link #DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING}, or if the
-     * cluster doesn't have the feature available
+     * - not applicable if the data stream is excluded from auto sharding as configured by
+     * {@link #DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING} or if the auto sharding functionality is disabled according to
+     * {@link #DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING}, or if the cluster doesn't have the feature available
      * - increase number of shards if the optimal number of shards it deems necessary for the provided data stream is GT the current number
      * of shards
      * - decrease the number of shards if the optimal number of shards it deems necessary for the provided data stream is LT the current
@@ -275,7 +274,7 @@ public class DataStreamAutoShardingService {
     // visible for testing
     AutoShardingResult innerCalculate(Metadata metadata, DataStream dataStream, double writeIndexLoad, LongSupplier nowSupplier) {
         // increasing the number of shards is calculated solely based on the index load of the write index
-        long optimalIncreaseShardsNumber = computeOptimalNumberOfShards(writeIndexLoad);
+        long optimalIncreaseShardsNumber = computeOptimalNumberOfShards(minNumberWriteThreads, maxNumberWriteThreads, writeIndexLoad);
         IndexMetadata writeIndex = metadata.index(dataStream.getWriteIndex());
         assert writeIndex != null : "the data stream write index must exist in the provided cluster metadata";
         TimeValue timeSinceLastAutoShardingEvent = dataStream.getAutoShardingEvent() != null
@@ -283,30 +282,56 @@ public class DataStreamAutoShardingService {
             : TimeValue.MAX_VALUE;
 
         if (optimalIncreaseShardsNumber > writeIndex.getNumberOfShards()) {
-            // check cooldown for increasing the number of shards
-            TimeValue remainingCoolDown = TimeValue.timeValueMillis(
-                Math.max(0L, increaseShardsCooldown.millis() - timeSinceLastAutoShardingEvent.millis())
-            );
-
             return new AutoShardingResult(
                 AutoShardingType.INCREASE_NUMBER_OF_SHARDS,
                 writeIndex.getNumberOfShards(),
                 Math.toIntExact(optimalIncreaseShardsNumber),
-                remainingCoolDown,
+                TimeValue.timeValueMillis(Math.max(0L, increaseShardsCooldown.millis() - timeSinceLastAutoShardingEvent.millis())),
                 writeIndexLoad
             );
         }
 
-        double maxIndexLoadWithinCoolingPeriod = getMaxIndexLoadWithinCoolingPeriod(metadata, dataStream, writeIndexLoad, nowSupplier);
-        long targetReducedNumberOfShards = computeOptimalNumberOfShards(maxIndexLoadWithinCoolingPeriod);
+        TimeValue remainingReduceShardsCooldown = TimeValue.timeValueMillis(
+            Math.max(0L, reduceShardsCooldown.millis() - timeSinceLastAutoShardingEvent.millis())
+        );
+        // the way we hand the cool down when reducing the number of shards is concerned is a bit different as it involves checking the
+        // write load of more than just the write index.
+        // because we have to look at the maximum write load encountered within the configured cool down period this can involve
+        // checking the write load for older backing indices. if the cool down period hasn't lapsed we short circuit here and return
+        // NO_CHANGE_REQUIRED because we don't want our historic write load lookup to include backing indices that are older than the
+        // previos auto scaling event (this would happen if say, we increased the number of shards 1 day ago, and there's 2 days left of
+        // the reduce number of shards cool down - looking back the entire cool down period (3 days) would include the previous couple
+        // backing indices, including the one that triggered the increase number of shards event)
+        if (remainingReduceShardsCooldown.equals(TimeValue.ZERO) == false) {
+            return new AutoShardingResult(
+                AutoShardingType.NO_CHANGE_REQUIRED,
+                writeIndex.getNumberOfShards(),
+                writeIndex.getNumberOfShards(),
+                TimeValue.ZERO,
+                writeIndexLoad
+            );
+        }
 
-        if (targetReducedNumberOfShards < writeIndex.getNumberOfShards()) {
+        double maxIndexLoadWithinCoolingPeriod = getMaxIndexLoadWithinCoolingPeriod(
+            metadata,
+            dataStream,
+            writeIndexLoad,
+            reduceShardsCooldown,
+            nowSupplier
+        );
+        long optimalReduceNumberOfShards = computeOptimalNumberOfShards(
+            minNumberWriteThreads,
+            maxNumberWriteThreads,
+            maxIndexLoadWithinCoolingPeriod
+        );
+
+        if (optimalReduceNumberOfShards < writeIndex.getNumberOfShards()) {
             // we should reduce the number of shards
             return new AutoShardingResult(
                 AutoShardingType.DECREASES_NUMBER_OF_SHARDS,
                 writeIndex.getNumberOfShards(),
-                Math.toIntExact(targetReducedNumberOfShards),
-                TimeValue.timeValueMillis(Math.max(0L, reduceShardsCooldown.millis() - timeSinceLastAutoShardingEvent.millis())),
+                Math.toIntExact(optimalReduceNumberOfShards),
+                remainingReduceShardsCooldown,
                 maxIndexLoadWithinCoolingPeriod
             );
         }
@@ -320,26 +345,30 @@ public class DataStreamAutoShardingService {
         );
     }
 
-    private long computeOptimalNumberOfShards(double indexingLoad) {
+    // Visible for testing
+    static long computeOptimalNumberOfShards(int minNumberWriteThreads, int maxNumberWriteThreads, double indexingLoad) {
         return Math.max(
             Math.min(Math.round(indexingLoad / ((double) minNumberWriteThreads / 2)), 3),
             Math.round(indexingLoad / ((double) maxNumberWriteThreads / 2))
         );
     }
 
-    private double getMaxIndexLoadWithinCoolingPeriod(
+    // Visible for testing
+    static double getMaxIndexLoadWithinCoolingPeriod(
         Metadata metadata,
         DataStream dataStream,
         double writeIndexLoad,
+        TimeValue coolingPeriod,
         LongSupplier nowSupplier
     ) {
         // for reducing the number of shards we look at more than just the write index
-        List<IndexWriteLoad> writeLoadsWithinCoolingPeriod = getIndicesCreatedWithin(
-            metadata,
+        List<IndexWriteLoad> writeLoadsWithinCoolingPeriod = DataStream.getIndicesWithinMaxAgeRange(
             dataStream,
-            reduceShardsCooldown,
+            metadata::getIndexSafe,
+            coolingPeriod,
             nowSupplier
-        ).stream()
+        )
+            .stream()
             .filter(index -> index.equals(dataStream.getWriteIndex()) == false)
             .map(metadata::index)
             .filter(Objects::nonNull)
@@ -365,25 +394,6 @@ public class DataStreamAutoShardingService {
             }
         }
         return maxIndexLoadWithinCoolingPeriod;
-    }
-
-    // Visible for testing
-    List<Index> getIndicesCreatedWithin(Metadata metadata, DataStream dataStream, TimeValue timeframe, LongSupplier nowSupplier) {
-        final List<Index> dataStreamIndices = dataStream.getIndices();
-        final long currentTimeMillis = nowSupplier.getAsLong();
-        // Consider at least 1 index (including the write index) for cases where rollovers happen less often than timeframe
-        int firstIndexWithinAgeRange = Math.max(dataStreamIndices.size() - 2, 0);
-        for (int i = 0; i < dataStreamIndices.size(); i++) {
-            Index index = dataStreamIndices.get(i);
-            final IndexMetadata indexMetadata = metadata.index(index);
-            final long indexAge = currentTimeMillis - indexMetadata.getCreationDate();
-            if (indexAge < timeframe.getMillis()) {
-                // We need to consider the previous index too in order to cover the entire max-index-age range.
-                firstIndexWithinAgeRange = i == 0 ? 0 : i - 1;
-                break;
-            }
-        }
-        return dataStreamIndices.subList(firstIndexWithinAgeRange, dataStreamIndices.size());
     }
 
     void updateIncreaseShardsCooldown(TimeValue scaleUpCooldown) {
