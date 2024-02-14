@@ -293,30 +293,42 @@ public class MetadataRolloverService {
 
         AtomicReference<DataStreamAutoShardingEvent> newAutoShardingEvent = new AtomicReference<>();
         if (autoShardingResult != null) {
-            // we're auto sharding on rollover
-            assert autoShardingResult.coolDownRemaining().equals(TimeValue.ZERO) : "the auto sharding result must be ready to apply";
-            logger.info("Auto sharding data stream [{}] to [{}]", dataStreamName, autoShardingResult);
-            Settings settingsWithAutoSharding = Settings.builder()
-                .put(createIndexRequest.settings())
-                .put(IndexMetadata.INDEX_NUMBER_OF_SHARDS_SETTING.getKey(), autoShardingResult.targetNumberOfShards())
-                .build();
-            createIndexRequest.settings(settingsWithAutoSharding);
-            newAutoShardingEvent.set(
-                new DataStreamAutoShardingEvent(
-                    dataStream.getWriteIndex().getName(),
-                    dataStream.getGeneration(),
-                    autoShardingResult.targetNumberOfShards(),
-                    now.toEpochMilli()
-                )
-            );
-        } else if (dataStream.getAutoShardingEvent() != null) {
-            // we're not auto sharding on this rollover but maybe a previous rollover did so we have to use the number of shards
-            // configured by the previous auto sharding event
-            Settings settingsWithAutoSharding = Settings.builder()
-                .put(createIndexRequest.settings())
-                .put(IndexMetadata.INDEX_NUMBER_OF_SHARDS_SETTING.getKey(), dataStream.getAutoShardingEvent().targetNumberOfShards())
-                .build();
-            createIndexRequest.settings(settingsWithAutoSharding);
+            switch (autoShardingResult.type()) {
+                case NO_CHANGE_REQUIRED -> {
+                    logger.info(
+                        "Rolling over data stream [{}] using existing auto-sharding recommendation [{}]",
+                        dataStreamName,
+                        autoShardingResult
+                    );
+                    // the auto sharding recommendation hasn't changed on this rollover
+                    Settings settingsWithAutoSharding = Settings.builder()
+                        .put(createIndexRequest.settings())
+                        .put(IndexMetadata.INDEX_NUMBER_OF_SHARDS_SETTING.getKey(), autoShardingResult.targetNumberOfShards())
+                        .build();
+                    createIndexRequest.settings(settingsWithAutoSharding);
+                }
+                case INCREASE_NUMBER_OF_SHARDS, DECREASES_NUMBER_OF_SHARDS -> {
+                    if (autoShardingResult.coolDownRemaining().equals(TimeValue.ZERO)) {
+                        logger.info("Auto sharding data stream [{}] to [{}]", dataStreamName, autoShardingResult);
+                        Settings settingsWithAutoSharding = Settings.builder()
+                            .put(createIndexRequest.settings())
+                            .put(IndexMetadata.INDEX_NUMBER_OF_SHARDS_SETTING.getKey(), autoShardingResult.targetNumberOfShards())
+                            .build();
+                        createIndexRequest.settings(settingsWithAutoSharding);
+                        newAutoShardingEvent.set(
+                            new DataStreamAutoShardingEvent(
+                                dataStream.getWriteIndex().getName(),
+                                dataStream.getGeneration(),
+                                autoShardingResult.targetNumberOfShards(),
+                                now.toEpochMilli()
+                            )
+                        );
+                    }
+                }
+                // data sharding might not be avilable due to the feature not being available/enabled or due to cluster level excludes
+                // being configured. the index template will dictate the number of shards as usual
+                case NOT_APPLICABLE -> logger.debug("auto sharding is not applicable for data stream [{}]", dataStreamName);
+            }
         }
 
         var createIndexClusterStateRequest = prepareDataStreamCreateIndexRequest(

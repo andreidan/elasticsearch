@@ -47,7 +47,6 @@ import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.core.Nullable;
-import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.shard.DocsStats;
 import org.elasticsearch.index.shard.IndexingStats;
 import org.elasticsearch.tasks.CancellableTask;
@@ -64,9 +63,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
-
-import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingType.DECREASES_NUMBER_OF_SHARDS;
-import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingType.INCREASE_NUMBER_OF_SHARDS;
 
 /**
  * Main class to swap the index pointed to by an alias, given some conditions
@@ -248,26 +244,13 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
                         }
                     }
 
-                    // reach out to the data stream auto sharding service to get a _recommendation_ on auto sharding (note that
-                    // this recommendation might still require waiting for cooldown to lapse or might not be applicable)
-                    var autoShardingRecommendation = dataStreamAutoShardingService.calculate(clusterState, dataStream, writeLoad);
-                    logger.debug("data stream auto sharding result is [{}]", autoShardingRecommendation);
+                    rolloverAutoSharding = dataStreamAutoShardingService.calculate(clusterState, dataStream, writeLoad);
+                    logger.debug("data stream auto sharding result is [{}]", rolloverAutoSharding);
 
-                    rolloverAutoSharding = switch (autoShardingRecommendation.type()) {
-                        case NO_CHANGE_REQUIRED, NOT_APPLICABLE -> null;
-                        case INCREASE_NUMBER_OF_SHARDS -> {
-                            // irrespective of the cool down period we want the implicit INCREASE SHARDS condition to be added to the
-                            // rollover request so the response contains an indication of the remaining cooldown
-                            RolloverConditions conditionsIncludingImplicit = RolloverConditions.newBuilder(rolloverRequest.getConditions())
-                                .addAutoShardingCondition(autoShardingRecommendation)
-                                .build();
-                            rolloverRequest.setConditions(conditionsIncludingImplicit);
-                            yield autoShardingRecommendation.coolDownRemaining().equals(TimeValue.ZERO) ? autoShardingRecommendation : null;
-                        }
-                        case DECREASES_NUMBER_OF_SHARDS -> autoShardingRecommendation.coolDownRemaining().equals(TimeValue.ZERO)
-                            ? autoShardingRecommendation
-                            : null;
-                    };
+                    RolloverConditions conditionsIncludingImplicit = RolloverConditions.newBuilder(rolloverRequest.getConditions())
+                        .addAutoShardingCondition(rolloverAutoSharding)
+                        .build();
+                    rolloverRequest.setConditions(conditionsIncludingImplicit);
                 }
 
                 // Evaluate the conditions, so that we can tell without a cluster state update whether a rollover would occur.
@@ -375,19 +358,6 @@ public class TransportRolloverAction extends TransportMasterNodeAction<RolloverR
         @Nullable AutoShardingResult autoShardingResult,
         ActionListener<RolloverResponse> listener
     ) implements ClusterStateTaskListener {
-        RolloverTask {
-            if (autoShardingResult != null) {
-                if ((autoShardingResult.type() != INCREASE_NUMBER_OF_SHARDS && autoShardingResult.type() != DECREASES_NUMBER_OF_SHARDS)
-                    || (autoShardingResult.coolDownRemaining().equals(TimeValue.ZERO) == false)) {
-                    throw new IllegalArgumentException(
-                        "The auto sharding recommendation of a rollover task must be valid (increase or "
-                            + "decrease shards) and effective (no cooldown remaining) but received ["
-                            + autoShardingResult
-                            + "]"
-                    );
-                }
-            }
-        }
 
         @Override
         public void onFailure(Exception e) {

@@ -28,6 +28,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
+import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingType.INCREASE_NUMBER_OF_SHARDS;
+
 /**
  * Contains the conditions that determine if an index can be rolled over or not. It is used by the {@link RolloverRequest},
  * the Index Lifecycle Management and the Data Stream Lifecycle.
@@ -418,8 +420,10 @@ public class RolloverConditions implements Writeable, ToXContentObject {
          * Adds an auto sharding scale up condition.
          */
         public Builder addAutoShardingCondition(AutoShardingResult autoShardingResult) {
-            AutoShardingCondition autoShardingCondition = new AutoShardingCondition(autoShardingResult);
-            this.conditions.put(autoShardingCondition.name, autoShardingCondition);
+            if (autoShardingResult.type().equals(INCREASE_NUMBER_OF_SHARDS)) {
+                AutoShardingCondition autoShardingCondition = new AutoShardingCondition(autoShardingResult);
+                this.conditions.put(autoShardingCondition.name, autoShardingCondition);
+            }
             return this;
         }
 
