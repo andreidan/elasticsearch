@@ -18,6 +18,7 @@ import org.elasticsearch.action.datastreams.GetDataStreamAction;
 import org.elasticsearch.action.datastreams.MigrateToDataStreamAction;
 import org.elasticsearch.action.datastreams.ModifyDataStreamsAction;
 import org.elasticsearch.action.datastreams.PromoteDataStreamAction;
+import org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService;
 import org.elasticsearch.client.internal.OriginSettingClient;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
@@ -132,6 +133,7 @@ public class DataStreamsPlugin extends Plugin implements ActionPlugin, HealthPlu
     private final SetOnce<DataStreamLifecycleService> dataLifecycleInitialisationService = new SetOnce<>();
     private final SetOnce<DataStreamLifecycleHealthInfoPublisher> dataStreamLifecycleErrorsPublisher = new SetOnce<>();
     private final SetOnce<DataStreamLifecycleHealthIndicatorService> dataStreamLifecycleHealthIndicatorService = new SetOnce<>();
+    private final SetOnce<DataStreamAutoShardingService> dataStreamAutoShardingServiceSetOnce = new SetOnce<>();
     private final Settings settings;
 
     public DataStreamsPlugin(Settings settings) {
@@ -166,6 +168,11 @@ public class DataStreamsPlugin extends Plugin implements ActionPlugin, HealthPlu
         pluginSettings.add(DataStreamLifecycleService.DATA_STREAM_MERGE_POLICY_TARGET_FLOOR_SEGMENT_SETTING);
         pluginSettings.add(DataStreamLifecycleService.DATA_STREAM_MERGE_POLICY_TARGET_FACTOR_SETTING);
         pluginSettings.add(DataStreamLifecycleService.DATA_STREAM_SIGNALLING_ERROR_RETRY_INTERVAL_SETTING);
+        pluginSettings.add(DataStreamAutoShardingService.DATA_STREAMS_AUTO_SHARDING_EXCLUDES_SETTING);
+        pluginSettings.add(DataStreamAutoShardingService.DATA_STREAMS_AUTO_SHARDING_INCREASE_SHARDS_COOLDOWN);
+        pluginSettings.add(DataStreamAutoShardingService.DATA_STREAMS_AUTO_SHARDING_DECREASE_SHARDS_COOLDOWN);
+        pluginSettings.add(DataStreamAutoShardingService.CLUSTER_AUTO_SHARDING_MIN_WRITE_THREADS);
+        pluginSettings.add(DataStreamAutoShardingService.CLUSTER_AUTO_SHARDING_MAX_WRITE_THREADS);
         return pluginSettings;
     }
 
@@ -206,9 +213,20 @@ public class DataStreamsPlugin extends Plugin implements ActionPlugin, HealthPlu
         dataLifecycleInitialisationService.get().init();
         dataStreamLifecycleHealthIndicatorService.set(new DataStreamLifecycleHealthIndicatorService());
 
+        dataStreamAutoShardingServiceSetOnce.set(
+            new DataStreamAutoShardingService(
+                settings,
+                services.clusterService(),
+                services.featureService(),
+                services.threadPool()::absoluteTimeInMillis
+            )
+        );
+        dataStreamAutoShardingServiceSetOnce.get().init();
+
         components.add(errorStoreInitialisationService.get());
         components.add(dataLifecycleInitialisationService.get());
         components.add(dataStreamLifecycleErrorsPublisher.get());
+        components.add(dataStreamAutoShardingServiceSetOnce.get());
         return components;
     }
 

@@ -7,6 +7,8 @@
  */
 package org.elasticsearch.action.admin.indices.rollover;
 
+import org.elasticsearch.action.datastreams.autosharding.AutoShardingResult;
+import org.elasticsearch.action.datastreams.autosharding.AutoShardingType;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -243,7 +245,12 @@ public class RolloverConditions implements Writeable, ToXContentObject {
             .filter(c -> Condition.Type.MAX == c.type())
             .anyMatch(c -> conditionResults.getOrDefault(c.toString(), false));
 
-        return conditionResults.size() == 0 || (allMinConditionsMet && anyMaxConditionsMet);
+        boolean anyAutomaticConditionsMet = conditions.values()
+            .stream()
+            .filter(c -> Condition.Type.AUTOMATIC == c.type())
+            .anyMatch(c -> conditionResults.getOrDefault(c.toString(), false));
+
+        return conditionResults.size() == 0 || (allMinConditionsMet && anyMaxConditionsMet) || anyAutomaticConditionsMet;
     }
 
     public static RolloverConditions fromXContent(XContentParser parser) throws IOException {
@@ -404,6 +411,24 @@ public class RolloverConditions implements Writeable, ToXContentObject {
             if (numDocs != null) {
                 MinPrimaryShardDocsCondition minPrimaryShardDocsCondition = new MinPrimaryShardDocsCondition(numDocs);
                 this.conditions.put(minPrimaryShardDocsCondition.name, minPrimaryShardDocsCondition);
+            }
+            return this;
+        }
+
+        /**
+         * Adds an auto sharding increase shards condition, ignores it otherwise.
+         */
+        public Builder addAutoShardingCondition(AutoShardingResult autoShardingResult) {
+            if (autoShardingResult.type().equals(AutoShardingType.INCREASE_SHARDS)) {
+                AutoShardingCondition autoShardingCondition = new AutoShardingCondition(
+                    new IncreaseShardsCondition(
+                        autoShardingResult.currentNumberOfShards(),
+                        autoShardingResult.targetNumberOfShards(),
+                        autoShardingResult.coolDownRemaining(),
+                        autoShardingResult.writeLoad()
+                    )
+                );
+                this.conditions.put(autoShardingCondition.name, autoShardingCondition);
             }
             return this;
         }
