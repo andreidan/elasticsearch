@@ -28,9 +28,11 @@ import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.features.FeatureService;
 import org.elasticsearch.features.NodeFeature;
 import org.elasticsearch.index.Index;
+import org.elasticsearch.xcontent.ConstructingObjectParser;
 import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.ToXContentObject;
 import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.List;
@@ -38,6 +40,9 @@ import java.util.Objects;
 import java.util.OptionalDouble;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
+
+import static org.elasticsearch.xcontent.ConstructingObjectParser.constructorArg;
+import static org.elasticsearch.xcontent.ConstructingObjectParser.optionalConstructorArg;
 
 /**
  * Calculates the optimal number of shards the data stream write index should have based on the indexing load.
@@ -138,6 +143,30 @@ public class DataStreamAutoShardingService {
         public static final ParseField COOLDOWN_REMAINING = new ParseField("cool_down_remaining");
         public static final ParseField WRITE_LOAD = new ParseField("write_load");
 
+        public static final ConstructingObjectParser<AutoShardingResult, Void> PARSER = new ConstructingObjectParser<>(
+            "auto_sharding",
+            false,
+            (args, unused) -> new AutoShardingResult(
+                AutoShardingType.valueOf((String) args[0]),
+                (Integer) args[1],
+                (Integer) args[2],
+                (TimeValue) args[3],
+                (Double) args[4]
+            )
+        );
+
+        static {
+            PARSER.declareString(constructorArg(), AUTO_SHARDING_TYPE);
+            PARSER.declareInt(constructorArg(), CURRENT_NUMBER_OF_SHARDS);
+            PARSER.declareInt(constructorArg(), TARGET_NUMBER_OF_SHARDS);
+            PARSER.declareString(
+                constructorArg(),
+                value -> TimeValue.parseTimeValue(value, COOLDOWN_REMAINING.getPreferredName()),
+                COOLDOWN_REMAINING
+            );
+            PARSER.declareDouble(optionalConstructorArg(), WRITE_LOAD);
+        }
+
         public AutoShardingResult(
             AutoShardingType type,
             int currentNumberOfShards,
@@ -166,6 +195,10 @@ public class DataStreamAutoShardingService {
             builder.field(WRITE_LOAD.getPreferredName(), writeLoad);
             builder.endObject();
             return builder;
+        }
+
+        public static AutoShardingResult fromXContent(XContentParser parser) throws IOException {
+            return PARSER.parse(parser, null);
         }
 
         @Override

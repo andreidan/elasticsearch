@@ -14,14 +14,13 @@ import org.elasticsearch.cluster.metadata.DataStream;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.xcontent.ConstructingObjectParser;
+import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 
-import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingResult.CURRENT_NUMBER_OF_SHARDS;
-import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingResult.TARGET_NUMBER_OF_SHARDS;
-import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingResult.WRITE_LOAD;
 import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoShardingService.AutoShardingType.INCREASE_NUMBER_OF_SHARDS;
 
 /**
@@ -30,7 +29,17 @@ import static org.elasticsearch.action.datastreams.autosharding.DataStreamAutoSh
  */
 public class AutoShardingCondition extends Condition<AutoShardingResult> {
     public static final String NAME = "auto_sharding";
-    private boolean isConditionMet;
+    private final boolean isConditionMet;
+
+    public static final ConstructingObjectParser<AutoShardingCondition, Void> PARSER = new ConstructingObjectParser<>(
+        "auto_sharding_condition",
+        false,
+        (args, unused) -> new AutoShardingCondition((AutoShardingResult) args[0])
+    );
+
+    static {
+        PARSER.declareObject(ConstructingObjectParser.constructorArg(), (p, c) -> AutoShardingResult.fromXContent(p), new ParseField(NAME));
+    }
 
     public AutoShardingCondition(AutoShardingResult autoShardingResult) {
         super(NAME, Type.AUTOMATIC);
@@ -41,6 +50,7 @@ public class AutoShardingCondition extends Condition<AutoShardingResult> {
     public AutoShardingCondition(StreamInput in) throws IOException {
         super(NAME, Type.AUTOMATIC);
         this.value = new AutoShardingResult(in);
+        this.isConditionMet = (value.type() == INCREASE_NUMBER_OF_SHARDS && value.coolDownRemaining().equals(TimeValue.ZERO));
     }
 
     @Override
@@ -61,32 +71,12 @@ public class AutoShardingCondition extends Condition<AutoShardingResult> {
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         // we only save this representation in the cluster state as part of meet_conditions when this condition is met
-        if (isConditionMet) {
-            builder.startObject(NAME);
-            builder.field(CURRENT_NUMBER_OF_SHARDS.getPreferredName(), value.currentNumberOfShards());
-            builder.field(TARGET_NUMBER_OF_SHARDS.getPreferredName(), value.targetNumberOfShards());
-            assert value.writeLoad() != null
-                : "when the condition matches, a change in number of shards is executed and a write load must be present";
-            builder.field(WRITE_LOAD.getPreferredName(), value.writeLoad());
-            builder.endObject();
-        }
+        builder.field(NAME, value);
         return builder;
     }
 
     public static AutoShardingCondition fromXContent(XContentParser parser) throws IOException {
-        if (parser.nextToken() == XContentParser.Token.START_OBJECT) {
-            return new AutoShardingCondition(
-                new AutoShardingResult(
-                    INCREASE_NUMBER_OF_SHARDS,
-                    parser.intValue(),
-                    parser.intValue(),
-                    TimeValue.ZERO,
-                    parser.doubleValue()
-                )
-            );
-        } else {
-            throw new IllegalArgumentException("invalid token when parsing " + NAME + " condition: " + parser.currentToken());
-        }
+        return PARSER.parse(parser, null);
     }
 
     @Override
