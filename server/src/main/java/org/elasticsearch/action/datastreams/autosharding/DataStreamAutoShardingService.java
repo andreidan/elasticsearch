@@ -30,6 +30,7 @@ import org.elasticsearch.features.NodeFeature;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.xcontent.ConstructingObjectParser;
 import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.ToXContentFragment;
 import org.elasticsearch.xcontent.ToXContentObject;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
@@ -135,37 +136,7 @@ public class DataStreamAutoShardingService {
         int targetNumberOfShards,
         TimeValue coolDownRemaining,
         @Nullable Double writeLoad
-    ) implements Writeable, ToXContentObject {
-
-        public static final ParseField AUTO_SHARDING_TYPE = new ParseField("type");
-        public static final ParseField CURRENT_NUMBER_OF_SHARDS = new ParseField("current_number_of_shards");
-        public static final ParseField TARGET_NUMBER_OF_SHARDS = new ParseField("target_number_of_shards");
-        public static final ParseField COOLDOWN_REMAINING = new ParseField("cool_down_remaining");
-        public static final ParseField WRITE_LOAD = new ParseField("write_load");
-
-        public static final ConstructingObjectParser<AutoShardingResult, Void> PARSER = new ConstructingObjectParser<>(
-            "auto_sharding",
-            false,
-            (args, unused) -> new AutoShardingResult(
-                AutoShardingType.valueOf((String) args[0]),
-                (Integer) args[1],
-                (Integer) args[2],
-                (TimeValue) args[3],
-                (Double) args[4]
-            )
-        );
-
-        static {
-            PARSER.declareString(constructorArg(), AUTO_SHARDING_TYPE);
-            PARSER.declareInt(constructorArg(), CURRENT_NUMBER_OF_SHARDS);
-            PARSER.declareInt(constructorArg(), TARGET_NUMBER_OF_SHARDS);
-            PARSER.declareString(
-                constructorArg(),
-                value -> TimeValue.parseTimeValue(value, COOLDOWN_REMAINING.getPreferredName()),
-                COOLDOWN_REMAINING
-            );
-            PARSER.declareDouble(optionalConstructorArg(), WRITE_LOAD);
-        }
+    ) implements Writeable {
 
         public AutoShardingResult(
             AutoShardingType type,
@@ -183,22 +154,6 @@ public class DataStreamAutoShardingService {
 
         public AutoShardingResult(StreamInput in) throws IOException {
             this(in.readEnum(AutoShardingType.class), in.readVInt(), in.readVInt(), in.readTimeValue(), in.readOptionalDouble());
-        }
-
-        @Override
-        public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-            builder.startObject();
-            builder.field(AUTO_SHARDING_TYPE.getPreferredName(), type);
-            builder.field(CURRENT_NUMBER_OF_SHARDS.getPreferredName(), currentNumberOfShards);
-            builder.field(TARGET_NUMBER_OF_SHARDS.getPreferredName(), targetNumberOfShards);
-            builder.field(COOLDOWN_REMAINING.getPreferredName(), coolDownRemaining.toHumanReadableString(2));
-            builder.field(WRITE_LOAD.getPreferredName(), writeLoad);
-            builder.endObject();
-            return builder;
-        }
-
-        public static AutoShardingResult fromXContent(XContentParser parser) throws IOException {
-            return PARSER.parse(parser, null);
         }
 
         @Override
