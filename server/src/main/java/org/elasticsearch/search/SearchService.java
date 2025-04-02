@@ -24,6 +24,7 @@ import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.ResolvedIndices;
 import org.elasticsearch.action.search.CanMatchNodeRequest;
 import org.elasticsearch.action.search.CanMatchNodeResponse;
+import org.elasticsearch.action.search.OnlinePrewarmingService;
 import org.elasticsearch.action.search.SearchShardTask;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.action.support.TransportActions;
@@ -316,6 +317,7 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
 
     private final FetchPhase fetchPhase;
     private final CircuitBreaker circuitBreaker;
+    private final OnlinePrewarmingService onlinePrewarmingService;
     private volatile Executor searchExecutor;
     private volatile boolean enableQueryPhaseParallelCollection;
 
@@ -361,7 +363,8 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         FetchPhase fetchPhase,
         CircuitBreakerService circuitBreakerService,
         ExecutorSelector executorSelector,
-        Tracer tracer
+        Tracer tracer,
+        OnlinePrewarmingService onlinePrewarmingService
     ) {
         Settings settings = clusterService.getSettings();
         this.threadPool = threadPool;
@@ -374,7 +377,7 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         this.multiBucketConsumerService = new MultiBucketConsumerService(clusterService, settings, circuitBreaker);
         this.executorSelector = executorSelector;
         this.tracer = tracer;
-
+        this.onlinePrewarmingService = onlinePrewarmingService;
         TimeValue keepAliveInterval = KEEPALIVE_INTERVAL_SETTING.get(settings);
         setKeepAlives(DEFAULT_KEEPALIVE_SETTING.get(settings), MAX_KEEPALIVE_SETTING.get(settings));
 
@@ -669,6 +672,8 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         try {
             if (waitForCheckpoint <= UNASSIGNED_SEQ_NO) {
                 runAsync(executor, executable, listener);
+                // we successfully submitted the async task to the search pool so let's prewarm the shard
+                onlinePrewarmingService.prewarm(shard);
                 return;
             }
             if (shard.indexSettings().getRefreshInterval().getMillis() <= 0) {
@@ -745,6 +750,8 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
                             timeoutTask.cancel();
                         }
                         runAsync(executor, executable, listener);
+                        // we successfully submitted the async task to the search pool so let's prewarm the shard
+                        onlinePrewarmingService.prewarm(shard);
                     }
                 }
             });
@@ -918,6 +925,8 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
                 throw e;
             }
         }, wrapFailureListener(listener, readerContext, markAsUsed));
+        // we successfully submitted the async task to the search pool so let's prewarm the shard
+        onlinePrewarmingService.prewarm(readerContext.indexShard());
     }
 
     /**
@@ -975,6 +984,8 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
                     throw e;
                 }
             }, wrapFailureListener(l, readerContext, markAsUsed));
+            // we successfully submitted the async task to the search pool so let's prewarm the shard
+            onlinePrewarmingService.prewarm(readerContext.indexShard());
         }));
     }
 
