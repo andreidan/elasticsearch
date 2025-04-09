@@ -11,8 +11,22 @@ package org.elasticsearch.action.search;
 
 import org.elasticsearch.index.shard.IndexShard;
 
+/**
+ * Interface for prewarming the segments of a shard, tailored for consumption at
+ * higher volumes than alternative warming strategies (i.e. offline / recovery warming)
+ * that are more speculative.
+ */
 public interface OnlinePrewarmingService {
-    OnlinePrewarmingService NOOP = indexShard -> {};
+    OnlinePrewarmingService NOOP = (indexShard, skipPrewarmingCondition) -> {};
 
-    void prewarm(IndexShard indexShard);
+    /**
+     * Prewarms resources (typically segments) for the given index shard.
+     *
+     * @param indexShard the index shard for which resources should be prewarmed
+     * @param skipPrewarming a flag indicating whether prewarming should be skipped.
+     *                       Callers should  decide if certain prewarming calls
+     *                       should be skipped and indicate this decision via this
+     *                       flag.
+     */
+    void prewarm(IndexShard indexShard, boolean skipPrewarming);
 }
