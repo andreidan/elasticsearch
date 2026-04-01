@@ -43,12 +43,26 @@ public class OperationRouting {
         Setting.Property.NodeScope
     );
 
+    public static final Setting<Long> IN_FLIGHT_ARS_PROBE_CAP = Setting.longSetting(
+        "ars.in_flight_probe_cap",
+        8,
+        0,
+        Setting.Property.Dynamic,
+        Setting.Property.NodeScope
+    );
+
     private boolean useAdaptiveReplicaSelection;
+    private volatile long inFlightArsProbeCap;
 
     @SuppressWarnings("this-escape")
     public OperationRouting(Settings settings, ClusterSettings clusterSettings) {
         this.useAdaptiveReplicaSelection = USE_ADAPTIVE_REPLICA_SELECTION_SETTING.get(settings);
         clusterSettings.addSettingsUpdateConsumer(USE_ADAPTIVE_REPLICA_SELECTION_SETTING, this::setUseAdaptiveReplicaSelection);
+        clusterSettings.initializeAndWatch(IN_FLIGHT_ARS_PROBE_CAP, this::setInFlightArsProbeCap);
+    }
+
+    private void setInFlightArsProbeCap(Long newValue) {
+        this.inFlightArsProbeCap = newValue;
     }
 
     void setUseAdaptiveReplicaSelection(boolean useAdaptiveReplicaSelection) {
@@ -315,7 +329,7 @@ public class OperationRouting {
         @Nullable Map<String, Long> nodeCounts
     ) {
         if (useAdaptiveReplicaSelection) {
-            return indexShard.activeInitializingShardsRankedIt(collectorService, nodeCounts);
+            return indexShard.activeInitializingShardsRankedIt(collectorService, nodeCounts, inFlightArsProbeCap);
         } else {
             return indexShard.activeInitializingShardsRandomIt();
         }

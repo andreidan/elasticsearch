@@ -16,7 +16,6 @@ import org.elasticsearch.common.Randomness;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.util.CollectionUtils;
-import org.elasticsearch.common.util.FeatureFlag;
 import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.util.set.Sets;
 import org.elasticsearch.core.Nullable;
@@ -245,17 +244,31 @@ public class IndexShardRoutingTable {
      */
     public ShardIterator activeInitializingShardsRankedIt(
         @Nullable ResponseCollectorService collector,
-        @Nullable Map<String, Long> nodeSearchCounts
+        @Nullable Map<String, Long> nodeSearchCounts,
+        long inFlightArsCap
     ) {
         final int seed = shuffler.nextSeed();
         if (allInitializingShards.isEmpty()) {
-            return new ShardIterator(shardId, rankShardsAndUpdateStats(shuffler.shuffle(activeShards, seed), collector, nodeSearchCounts));
+            return new ShardIterator(
+                shardId,
+                rankShardsAndUpdateStats(shuffler.shuffle(activeShards, seed), collector, nodeSearchCounts, inFlightArsCap)
+            );
         }
 
         ArrayList<ShardRouting> ordered = new ArrayList<>(activeShards.size() + allInitializingShards.size());
-        List<ShardRouting> rankedActiveShards = rankShardsAndUpdateStats(shuffler.shuffle(activeShards, seed), collector, nodeSearchCounts);
+        List<ShardRouting> rankedActiveShards = rankShardsAndUpdateStats(
+            shuffler.shuffle(activeShards, seed),
+            collector,
+            nodeSearchCounts,
+            inFlightArsCap
+        );
         ordered.addAll(rankedActiveShards);
-        List<ShardRouting> rankedInitializingShards = rankShardsAndUpdateStats(allInitializingShards, collector, nodeSearchCounts);
+        List<ShardRouting> rankedInitializingShards = rankShardsAndUpdateStats(
+            allInitializingShards,
+            collector,
+            nodeSearchCounts,
+            inFlightArsCap
+        );
         ordered.addAll(rankedInitializingShards);
         return new ShardIterator(shardId, ordered);
     }
@@ -271,28 +284,6 @@ public class IndexShardRoutingTable {
         }
         return nodeStats;
     }
-
-    /**
-     * Feature flag for ARS probing of stat-less nodes. When enabled:
-     * <ul>
-     *   <li>Nodes without EWMA stats are probed ahead of measured nodes to build initial stats,
-     *       bounded by {@link #PROBE_INFLIGHT_CAP}.</li>
-     *   <li>Null ranks (no stats, above cap) sort last so stat-less nodes are deprioritized.</li>
-     * </ul>
-     * When disabled, the original ARS behavior is preserved: null ranks sort first and no
-     * probing is applied.
-     */
-    private static final FeatureFlag ARS_PROBING_FEATURE_FLAG = new FeatureFlag("ars_probing");
-
-    /**
-     * Maximum number of concurrent in-flight requests to a stat-less data node before it stops
-     * being probed. This is a per-coordinator cap — each coordinating node tracks its own
-     * in-flight counts independently, so the effective global cap for probes targeting a single
-     * data node is {@code PROBE_INFLIGHT_CAP * number_of_coordinators}. Caps the initial burst
-     * while the node builds EWMA stats from its first completed requests. Set to 0 (disabled)
-     * when the feature flag is off.
-     */
-    static final long PROBE_INFLIGHT_CAP = ARS_PROBING_FEATURE_FLAG.isEnabled() ? 8 : 0;
 
     /**
      * Computes a rank for each node based on its adaptive replica selection (ARS) stats.
@@ -391,7 +382,8 @@ public class IndexShardRoutingTable {
     private static List<ShardRouting> rankShardsAndUpdateStats(
         List<ShardRouting> shards,
         final ResponseCollectorService collector,
-        final Map<String, Long> nodeSearchCounts
+        final Map<String, Long> nodeSearchCounts,
+        long inFlightArsCap
     ) {
         if (collector == null || nodeSearchCounts == null || shards.size() <= 1) {
             return shards;
@@ -402,7 +394,7 @@ public class IndexShardRoutingTable {
 
         // sort all shards based on the shard rank
         ArrayList<ShardRouting> sortedShards = new ArrayList<>(shards);
-        sortedShards.sort(new NodeRankComparator(rankNodes(nodeStats, nodeSearchCounts, PROBE_INFLIGHT_CAP)));
+        sortedShards.sort(new NodeRankComparator(rankNodes(nodeStats, nodeSearchCounts, inFlightArsCap)));
 
         // adjust the non-winner nodes' stats so they will get a chance to receive queries
         ShardRouting minShard = sortedShards.get(0);
@@ -432,9 +424,7 @@ public class IndexShardRoutingTable {
          * stat-less nodes are deprioritized. When disabled, null ranks sort first to preserve the
          * original ARS behavior.
          */
-        private static final Comparator<Double> RANK_COMPARATOR = ARS_PROBING_FEATURE_FLAG.isEnabled()
-            ? Comparator.nullsLast(Double::compare)
-            : Comparator.nullsFirst(Double::compare);
+        private static final Comparator<Double> RANK_COMPARATOR = Comparator.nullsLast(Double::compare);
 
         private final Map<String, Double> nodeRanks;
 
