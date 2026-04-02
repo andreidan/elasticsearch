@@ -245,13 +245,24 @@ public class IndexShardRoutingTable {
     public ShardIterator activeInitializingShardsRankedIt(
         @Nullable ResponseCollectorService collector,
         @Nullable Map<String, Long> nodeSearchCounts,
-        long inFlightArsCap
+        double explorationProbability,
+        @Nullable Map<String, Long> liveInflightRequests,
+        long inflightCap,
+        int warmupResponsesCountThreshold
     ) {
         final int seed = shuffler.nextSeed();
         if (allInitializingShards.isEmpty()) {
             return new ShardIterator(
                 shardId,
-                rankShardsAndUpdateStats(shuffler.shuffle(activeShards, seed), collector, nodeSearchCounts, inFlightArsCap)
+                rankShardsAndUpdateStats(
+                    shuffler.shuffle(activeShards, seed),
+                    collector,
+                    nodeSearchCounts,
+                    explorationProbability,
+                    liveInflightRequests,
+                    inflightCap,
+                    warmupResponsesCountThreshold
+                )
             );
         }
 
@@ -260,14 +271,20 @@ public class IndexShardRoutingTable {
             shuffler.shuffle(activeShards, seed),
             collector,
             nodeSearchCounts,
-            inFlightArsCap
+            explorationProbability,
+            liveInflightRequests,
+            inflightCap,
+            warmupResponsesCountThreshold
         );
         ordered.addAll(rankedActiveShards);
         List<ShardRouting> rankedInitializingShards = rankShardsAndUpdateStats(
             allInitializingShards,
             collector,
             nodeSearchCounts,
-            inFlightArsCap
+            explorationProbability,
+            liveInflightRequests,
+            inflightCap,
+            warmupResponsesCountThreshold
         );
         ordered.addAll(rankedInitializingShards);
         return new ShardIterator(shardId, ordered);
@@ -288,53 +305,21 @@ public class IndexShardRoutingTable {
     /**
      * Computes a rank for each node based on its adaptive replica selection (ARS) stats.
      * Nodes with stats are ranked using the C3 formula via {@link ResponseCollectorService.ComputedNodeStats#rank}.
-     * Nodes without stats (e.g. newly joined) are assigned {@code Math.nextDown(bestRank)} so they
-     * are probed ahead of measured nodes, but only while their in-flight request count stays below
-     * {@code probeInflightCap}. Once at the cap they receive no rank entry, causing the
+     * Nodes without stats (e.g. newly joined) receive no rank entry, causing the
      * {@link NodeRankComparator} (nulls-last) to sort them after all ranked nodes.
-     *
-     * @param nodeStats        per-node EWMA stats; {@code Optional.empty()} for nodes without stats
-     * @param nodeSearchCounts per-node count of in-flight (outstanding) search requests on the
-     *                         coordinating node, captured from {@code TransportSearchAction}
-     * @param probeInflightCap maximum number of concurrent in-flight requests to a stat-less node
-     *                         before it stops being probed
-     * @return map of node ID to computed rank; nodes above the probe cap with no stats are absent
+     * Stat-less nodes receive traffic through ε-greedy exploration in {@link #rankShardsAndUpdateStats}.
      */
     static Map<String, Double> rankNodes(
         final Map<String, Optional<ResponseCollectorService.ComputedNodeStats>> nodeStats,
-        final Map<String, Long> nodeSearchCounts,
-        final long probeInflightCap
+        final Map<String, Long> nodeSearchCounts
     ) {
         final Map<String, Double> nodeRanks = Maps.newMapWithExpectedSize(nodeStats.size());
-        List<String> probeCandidates = null;
-        double bestRank = Double.POSITIVE_INFINITY;
         for (Map.Entry<String, Optional<ResponseCollectorService.ComputedNodeStats>> entry : nodeStats.entrySet()) {
             Optional<ResponseCollectorService.ComputedNodeStats> maybeStats = entry.getValue();
             if (maybeStats.isPresent()) {
                 final String nodeId = entry.getKey();
                 double rank = maybeStats.get().rank(nodeSearchCounts.getOrDefault(nodeId, 0L));
                 nodeRanks.put(nodeId, rank);
-                if (rank < bestRank) {
-                    bestRank = rank;
-                }
-            } else {
-                final String nodeId = entry.getKey();
-                if (nodeSearchCounts.getOrDefault(nodeId, 0L) < probeInflightCap) {
-                    // No stats and below the in-flight cap — candidate for probing
-                    if (probeCandidates == null) {
-                        probeCandidates = new ArrayList<>();
-                    }
-                    probeCandidates.add(nodeId);
-                }
-            }
-            // Nodes without stats at or above the cap already have enough probes in flight;
-            // they get no rank entry and sort last via nullsLast.
-        }
-
-        // Assign probe candidates just ahead of the best known rank so they receive traffic
-        if (probeCandidates != null && nodeRanks.isEmpty() == false) {
-            for (String nodeId : probeCandidates) {
-                nodeRanks.put(nodeId, Math.nextDown(bestRank));
             }
         }
         return nodeRanks;
@@ -383,7 +368,10 @@ public class IndexShardRoutingTable {
         List<ShardRouting> shards,
         final ResponseCollectorService collector,
         final Map<String, Long> nodeSearchCounts,
-        long inFlightArsCap
+        double explorationProbability,
+        @Nullable Map<String, Long> liveInflightRequests,
+        long inflightCap,
+        int warmupResponsesCountThreshold
     ) {
         if (collector == null || nodeSearchCounts == null || shards.size() <= 1) {
             return shards;
@@ -392,9 +380,33 @@ public class IndexShardRoutingTable {
         // Retrieve which nodes we can potentially send the query to
         final Map<String, Optional<ResponseCollectorService.ComputedNodeStats>> nodeStats = getNodeStats(shards, collector);
 
-        // sort all shards based on the shard rank
+        // sort all shards based on the shard rank — stat-less nodes sort last (nullsLast)
         ArrayList<ShardRouting> sortedShards = new ArrayList<>(shards);
-        sortedShards.sort(new NodeRankComparator(rankNodes(nodeStats, nodeSearchCounts, inFlightArsCap)));
+        sortedShards.sort(new NodeRankComparator(rankNodes(nodeStats, nodeSearchCounts)));
+
+        // ε-greedy exploration: with probability ε, promote an exploration candidate to winner.
+        // A node is an exploration candidate if it has no stats at all, or if it has stats but
+        // hasn't completed enough responses to be considered warmed up (caches populated, EWMA
+        // converged). Without this warmup period, a node that just got its first stats would
+        // have an artificially low queue (because it was throttled during exploration) and ARS
+        // would route all traffic to it at once.
+        // The live in-flight cap acts as a backstop, even if the coin flip succeeds,
+        // skip the node if it already has too many in-flight requests
+        if (explorationProbability > 0 && Randomness.get().nextDouble() < explorationProbability) {
+            ShardRouting candidate = findExplorationCandidate(
+                sortedShards,
+                nodeStats,
+                collector,
+                liveInflightRequests,
+                inflightCap,
+                warmupResponsesCountThreshold
+            );
+            if (candidate != null) {
+                // TODO: this remove call is O(n) but the number of replicas is in low digits usually, or low single digits at huge scale
+                sortedShards.remove(candidate);
+                sortedShards.add(0, candidate);
+            }
+        }
 
         // adjust the non-winner nodes' stats so they will get a chance to receive queries
         ShardRouting minShard = sortedShards.get(0);
@@ -402,20 +414,57 @@ public class IndexShardRoutingTable {
         // shards, don't bother to do adjustments
         if (minShard.started()) {
             String minNodeId = minShard.currentNodeId();
-            // Increase the number of searches for the "winning" node by one.
-            // Note that this doesn't actually affect the "real" counts, instead
-            // it only affects the captured node search counts, which is
-            // captured once for each query in TransportSearchAction.
-            // This must happen outside the stats check so that stat-less probe winners
-            // also increment the count, making the probe cap effective for multi-shard indices.
             nodeSearchCounts.compute(minNodeId, (id, conns) -> conns == null ? 1 : conns + 1);
+            // adjustStats is a no-op when the winner has no stats (nothing to blend into losers)
             Optional<ResponseCollectorService.ComputedNodeStats> maybeMinStats = nodeStats.get(minNodeId);
-            if (maybeMinStats.isPresent()) {
-                adjustStats(collector, nodeStats, minNodeId, maybeMinStats.get());
-            }
+            maybeMinStats.ifPresent(computedNodeStats -> adjustStats(collector, nodeStats, minNodeId, computedNodeStats));
         }
 
         return sortedShards;
+    }
+
+    /**
+     * Returns a shard whose node needs exploration traffic, or null if all nodes are warmed up.
+     * A node needs exploration if it has no stats, or if its response count (tracked separately
+     * by {@link ResponseCollectorService}) is below the warmup threshold — meaning its EWMA and
+     * caches haven't had enough traffic to reach steady state.
+     * The live in-flight cap filters out nodes that already have too many concurrent requests.
+     * When multiple eligible shards exist, one is chosen at random.
+     */
+    static ShardRouting findExplorationCandidate(
+        List<ShardRouting> shards,
+        Map<String, Optional<ResponseCollectorService.ComputedNodeStats>> nodeStats,
+        ResponseCollectorService collector,
+        @Nullable Map<String, Long> liveInflightRequests,
+        long inflightCap,
+        int warmupResponsesCountThreshold
+    ) {
+        List<ShardRouting> candidates = null;
+        for (ShardRouting shard : shards) {
+            if (shard.currentNodeId() == null) {
+                continue;
+            }
+            Optional<ResponseCollectorService.ComputedNodeStats> stats = nodeStats.get(shard.currentNodeId());
+            boolean needsExploration = stats.isEmpty() || collector.getResponseCount(shard.currentNodeId()) < warmupResponsesCountThreshold;
+            if (needsExploration == false) {
+                continue;
+            }
+            // backstop for the probabilistic element to check live in-flight count to avoid overwhelming the node
+            if (liveInflightRequests != null && inflightCap > 0) {
+                long inflight = liveInflightRequests.getOrDefault(shard.currentNodeId(), 0L);
+                if (inflight >= inflightCap) {
+                    continue;
+                }
+            }
+            if (candidates == null) {
+                candidates = new ArrayList<>(1);
+            }
+            candidates.add(shard);
+        }
+        if (candidates == null) {
+            return null;
+        }
+        return candidates.get(Randomness.get().nextInt(candidates.size()));
     }
 
     private static class NodeRankComparator implements Comparator<ShardRouting> {
