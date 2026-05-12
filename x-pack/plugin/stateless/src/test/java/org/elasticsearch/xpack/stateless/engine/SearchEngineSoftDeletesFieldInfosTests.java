@@ -25,6 +25,7 @@ import org.apache.lucene.index.SoftDeletesDirectoryReaderWrapper;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.store.Directory;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.index.codec.Elasticsearch93Lucene104Codec;
 import org.elasticsearch.test.ESTestCase;
 
 import java.io.IOException;
@@ -139,6 +140,83 @@ public class SearchEngineSoftDeletesFieldInfosTests extends ESTestCase {
         // sanity on the soft-delete itself
         assertEquals(3, r2.numDocs());     // d1(v2), d2, d3
         assertEquals(4, r2.maxDoc());      // plus the soft-deleted original d1
+
+        IOUtils.close(r2, r1, writer, dir);
+    }
+
+    /**
+     * same scenario as the test above, but with ES's production codec (which wires in
+     * DeduplicatingFieldInfosFormat via CodecService.DeduplicateFieldInfosCodec).
+     * using Elasticsearch93Lucene104Codec directly and proves (I think, Andrei doesn't know much Lucene :) ):
+     *
+     *   1.  the dedup IS doing what it claims i.e. field-name Strings have identity across
+     *       generations (via the static StringLiteralDeduplicator behind Mapper.internFieldName), and
+     *   2.  it is NOT enough to stop the heap stacking as every FieldInfo object is still
+     *       freshly allocated on every read (DeduplicatingFieldInfosFormat.read: new FieldInfo[]
+     *       + new FieldInfo() per entry).
+     */
+    public void testDeduplicatingFieldInfosFormatStillReallocatesFieldInfoObjects() throws IOException {
+        Directory dir = newDirectory();
+        String softDeletesField = "_soft_deletes";
+        IndexWriterConfig iwc = newIndexWriterConfig().setSoftDeletesField(softDeletesField)
+            .setMergePolicy(NoMergePolicy.INSTANCE)
+            .setCodec(new Elasticsearch93Lucene104Codec());
+        IndexWriter writer = new IndexWriter(dir, iwc);
+
+        for (int i = 1; i <= 3; i++) {
+            Document doc = new Document();
+            doc.add(new StringField("id", "d" + i, Field.Store.YES));
+            doc.add(new StringField("payload", "v1", Field.Store.YES));
+            doc.add(new NumericDocValuesField("version", 1L));
+            writer.addDocument(doc);
+        }
+        writer.commit();
+
+        DirectoryReader r1 = new SoftDeletesDirectoryReaderWrapper(DirectoryReader.open(dir), softDeletesField);
+        SegmentReader sr1 = unwrapToSegmentReader(r1.leaves().get(0).reader());
+        Object core1 = sr1.getCoreCacheHelper().getKey();
+        FieldInfo payload1 = sr1.getFieldInfos().fieldInfo("payload");
+        FieldInfo id1 = sr1.getFieldInfos().fieldInfo("id");
+        assertNotNull(payload1);
+        assertNotNull(id1);
+
+        Document updated = new Document();
+        updated.add(new StringField("id", "d1", Field.Store.YES));
+        updated.add(new StringField("payload", "v2", Field.Store.YES));
+        updated.add(new NumericDocValuesField("version", 2L));
+        writer.softUpdateDocument(new Term("id", "d1"), updated, new NumericDocValuesField(softDeletesField, 1));
+        writer.commit();
+
+        // reopen after soft update boy
+        DirectoryReader reopened = DirectoryReader.openIfChanged(r1);
+        assertNotNull(reopened);
+        DirectoryReader r2 = new SoftDeletesDirectoryReaderWrapper(reopened, softDeletesField);
+
+        SegmentReader sr2 = null;
+        for (var ctx : r2.leaves()) {
+            SegmentReader sr = unwrapToSegmentReader(ctx.reader());
+            if (sr.getCoreCacheHelper().getKey() == core1) {
+                sr2 = sr;
+                break;
+            }
+        }
+        assertNotNull("could not find the rotated segment", sr2);
+        FieldInfo payload2 = sr2.getFieldInfos().fieldInfo("payload");
+        FieldInfo id2 = sr2.getFieldInfos().fieldInfo("id");
+
+        // dedup is working for what it claims to dedup: field-name Strings have
+        // identity across generations (StringLiteralDeduplicator canonicalises them).
+        assertSame("field name 'payload' should be interned across generations", payload1.getName(), payload2.getName());
+        assertSame("field name 'id' should be interned across generations", id1.getName(), id2.getName());
+
+        // ...and yet the FieldInfo *object* itself is still a brand-new allocation
+        // per generation.
+        // This is the heap cost that DeduplicatingFieldInfosFormat does not address
+        assertNotSame("DeduplicatingFieldInfosFormat does NOT pool FieldInfo objects", payload1, payload2);
+        assertNotSame("DeduplicatingFieldInfosFormat does NOT pool FieldInfo objects", id1, id2);
+
+        // and the FieldInfos container itself is also fresh per generation.
+        assertNotSame("FieldInfos container should be a new object per generation", sr1.getFieldInfos(), sr2.getFieldInfos());
 
         IOUtils.close(r2, r1, writer, dir);
     }
